@@ -1,0 +1,19 @@
+syntax = "proto3";
+package quanta.v1;
+
+option go_package = "quanta/api/proto/v1;pb";
+
+service Control {
+  rpc Ping (PingRequest) returns (PingReply);
+  rpc DeployPipeline (DeployRequest) returns (DeployReply);
+  rpc PausePipeline  (PauseRequest)  returns (PauseReply);
+}
+
+message PingRequest  {}
+message PingReply    { string status = 1; }
+
+message DeployRequest { string yaml = 1; }
+message DeployReply   { string id   = 1; }
+
+message PauseRequest  { string id   = 1; }
+message PauseReply    { bool ok     = 1; }

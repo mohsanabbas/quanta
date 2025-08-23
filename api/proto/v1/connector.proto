@@ -1,0 +1,14 @@
+syntax = "proto3";
+package quanta.v1;
+
+option go_package = "quanta/api/proto/v1;pb";
+
+import "v1/frame.proto";
+
+service Connector {
+  rpc Stream (stream Frame) returns (stream ConnectorAck);
+}
+
+message ConnectorAck {
+  CheckpointToken checkpoint = 1;
+}

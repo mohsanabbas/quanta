@@ -1,0 +1,13 @@
+source:
+  kind:   kafka
+  driver: sarama
+  config: kafka_source.yml
+sinks:
+  - stdout
+debug:
+  per_frame_delay_ms: 10
+  print_counter:      true
+  ack_batch_size:     50
+  ack_flush_ms:       200
+
+

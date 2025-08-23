@@ -1,0 +1,42 @@
+syntax = "proto3";
+package quanta.v1;
+
+option go_package = "quanta/api/proto/v1;pb";
+
+import "google/protobuf/timestamp.proto";
+
+/* -------- generic checkpoint token -------------------------------------- */
+message KafkaOffset   {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+}
+
+message SqsHandle     {
+  string queue = 1;
+  string handle    = 2;
+}
+
+message HttpAckID     {
+  string id    = 1;
+}
+
+/* if you add more sources, extend this oneof – engine never parses it */
+message CheckpointToken {
+  oneof kind {
+    KafkaOffset kafka = 1;
+    SqsHandle   sqs   = 2;
+    HttpAckID   http  = 3;
+    bytes       raw   = 15;  // fallback
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+message Frame {
+  bytes key    = 1;
+  bytes value  = 2;
+  map<string, bytes> headers = 3;
+
+  google.protobuf.Timestamp ts = 4;
+  CheckpointToken checkpoint   = 5;
+}

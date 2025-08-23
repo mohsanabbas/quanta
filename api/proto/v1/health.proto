@@ -1,0 +1,12 @@
+syntax = "proto3";
+package quanta.v1;
+
+option go_package = "quanta/api/proto/v1;pb";
+
+// Liveness / readiness.
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckReply);
+}
+
+message HealthCheckRequest {}
+message HealthCheckReply  { bool ok = 1; }

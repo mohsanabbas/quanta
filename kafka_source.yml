@@ -1,0 +1,31 @@
+# kafka_source.yml
+# ------------------------------------------------------------------
+# Minimal connector-local configuration for the Quanta Kafka source
+# ------------------------------------------------------------------
+
+brokers:
+  - "localhost:9094"
+
+topics:
+  - "event-tracking_track-events-approved"        # change to any topic you have
+
+group_id: "quanta-src-track-events-approved"
+start_from:  "oldest"
+
+# Kafka broker version the Sarama client must speak.
+# Use `kafka-topics --version` or broker logs to confirm.
+version: "3.6.0"
+
+commit_mode: "e2e"   # or "auto"
+
+backpressure:
+  capacity: 10        # max frames in memory
+  check_interval: 50ms  # token refill tick
+
+checkpoint:
+  commit_interval: 2s    # flush offsets at most every 5 s
+
+# TLS / SASL left blank for localhost
+tls_enabled: false
+sasl_user:   ""
+sasl_pass:   ""
