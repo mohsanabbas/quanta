@@ -2,18 +2,18 @@
 
 Early-stage streaming/event-processing engine in Go. Reads from Kafka, invokes transformer plugins, and emits to sinks. Exposes gRPC control and a metrics endpoint.
 
-Status: source→transformers→sinks path is working with E2E acks; example gRPC transformer included.
+Status: source→transformers→sinks path is working with E2E acks  example gRPC transformer included.
 
 ## Features
 - Kafka source (Sarama) with backpressure and E2E commit support.
-- Pluggable transformers over gRPC; retry/backoff and drop+ack on exhaustion.
+- Pluggable transformers over gRPC  retry/backoff and drop+ack on exhaustion.
 - Stdout sink with configurable ack batching.
 - Versioned YAML configs (schema_version: v1).
 - Docker images from host-built Linux binaries (arm64/amd64).
 
 ## Configs (v1)
 - See CONFIGS.md for the full schema and examples.
-- pipeline.yml points to kafka_source.yml; relative paths are resolved relative to the pipeline file.
+- pipeline.yml points to kafka_source.yml  relative paths are resolved relative to the pipeline file.
 
 ## Quick start (host)
 1) Start the example transformer:
@@ -26,7 +26,7 @@ go run ./cmd/engine
 ```
 3) Validate:
 - Transformer logs should print: `uppercase plugin listening on :50052` and `received event ...` lines.
-- Engine prints sink offsets; Kafka UI shows periodic lag commits (E2E mode).
+- Engine prints sink offsets  Kafka UI shows periodic lag commits (E2E mode).
 
 Tip: Override pipeline path with `QUANTA_PIPELINE_YML=/abs/path/pipeline.yml`.
 
@@ -37,7 +37,7 @@ Prereqs
   - macOS/Windows: `host.docker.internal:9094` (default in kafka_source.docker.yml)
   - Linux: set `brokers: ["<host-ip>:9094"]` or run Kafka in Compose and update brokers accordingly.
 
-Build and run (arm64 default; use `ARCH=amd64` on Intel/AMD hosts):
+Build and run (arm64 default  use `ARCH=amd64` on Intel/AMD hosts):
 ```bash
 make docker-up ARCH=arm64     # or ARCH=amd64
 make docker-logs              # follow logs
@@ -66,18 +66,18 @@ make docker-down
 ## Validation results
 - Local build: PASS.
 - Docker (first attempt): FAIL due to arch mismatch (`taggedPointerPack` runtime error) when copying amd64 binaries into an arm64 runtime.
-- Fix: parameterized Dockerfiles with `BIN_DIR`, Makefile with `ARCH`, and Compose build args; rebuilt arm64 binaries/images.
-- Docker (arm64): PASS — both containers start; transformer logs `listening`; `curl http://localhost:9100/metrics` returns metrics.
+- Fix: parameterized Dockerfiles with `BIN_DIR`, Makefile with `ARCH`, and Compose build args  rebuilt arm64 binaries/images.
+- Docker (arm64): PASS — both containers start  transformer logs `listening`  `curl http://localhost:9100/metrics` returns metrics.
 
 ## Troubleshooting
 - Arch mismatch errors (e.g., `taggedPointerPack`): build with the correct `ARCH` and ensure Compose builds with `BIN_DIR=bin/linux-<arch>`.
 - Kafka connectivity: make sure the broker is reachable from containers (use `host.docker.internal` on macOS/Windows or host IP on Linux).
-- E2E mode appears stalled: transformer errors/timeouts are retried; after retries, engine drops+acks to avoid deadlocks. Check transformer logs; consider increasing `backpressure.capacity`.
+- E2E mode appears stalled: transformer errors/timeouts are retried  after retries, engine drops+acks to avoid deadlocks. Check transformer logs  consider increasing `backpressure.capacity`.
 - Port conflicts: change transformer listen port or engine metrics port mappings in Compose.
 
 ## Layout
 - cmd/engine — engine binary (reads `QUANTA_PIPELINE_YML` or `pipeline.yml`).
-- internal/pipeline — compiler and runner; wires source→transformers→sinks.
+- internal/pipeline — compiler and runner  wires source→transformers→sinks.
 - source/kafka — Sarama driver, backpressure, checkpoint manager, config.
 - internal/transform — plugin client (gRPC/in-process shim).
 - examples/transformers/uppercase — example gRPC transformer.
