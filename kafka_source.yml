@@ -3,6 +3,8 @@
 # Minimal connector-local configuration for the Quanta Kafka source
 # ------------------------------------------------------------------
 
+schema_version: v1
+
 brokers:
   - "localhost:9094"
 
@@ -16,14 +18,14 @@ start_from:  "oldest"
 # Use `kafka-topics --version` or broker logs to confirm.
 version: "3.6.0"
 
-commit_mode: "e2e"   # or "auto"
+commit_mode: "auto"   # or "e2e"
 
 backpressure:
-  capacity: 10        # max frames in memory
-  check_interval: 50ms  # token refill tick
+  capacity: 1000        # max frames in memory
+  check_interval: 500ms  # token refill tick
 
 checkpoint:
-  commit_interval: 2s    # flush offsets at most every 5 s
+  commit_interval: 5s    # flush offsets at most every 5 s
 
 # TLS / SASL left blank for localhost
 tls_enabled: false

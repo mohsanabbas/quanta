@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"log"
 	"net"
 	pb "quanta/api/proto/v1"
+	"quanta/internal/logging"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,40 +31,29 @@ func (p *UppercasePlugin) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.
 	return &pb.HealthResponse{Ok: true, Details: "OK"}, nil
 }
 
-//func (p *UppercasePlugin) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
-//	out := strings.ToUpper(string(req.Payload))
-//	ev := &pb.Event{
-//		Id:       req.Metadata.SourceOffset, // use offset as id in this example
-//		Value:    []byte(out),
-//		Metadata: req.Metadata,
-//	}
-//	return &pb.TransformResponse{
-//		Events: []*pb.Event{ev},
-//		Status: pb.Status_OK,
-//	}, nil
-//}
-
 func (p *UppercasePlugin) TransformStream(pb.TransformService_TransformStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "streaming not implemented")
 }
 
 func main() {
-	listenAddr := flag.String("listen", ":50051", "address to listen on")
+	listenAddr := flag.String("listen", ":50052", "address to listen on")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		logging.L().Error("uppercase: failed to listen", "err", err)
+		return
 	}
 	s := grpc.NewServer()
 	pb.RegisterTransformServiceServer(s, &UppercasePlugin{})
-	log.Printf("uppercase plugin listening on %s", *listenAddr)
+	logging.L().Info("uppercase plugin listening", "addr", *listenAddr)
 	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		logging.L().Error("uppercase: failed to serve", "err", err)
 	}
 }
 
-// define only the parts of the JSON you care about
+// A small struct to pull an event name for logging if present
+// { "context": { "event": "..." } }
 type eventWrapper struct {
 	Context struct {
 		Event string `json:"event"`
@@ -71,35 +61,36 @@ type eventWrapper struct {
 }
 
 func (p *UppercasePlugin) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
-	// Unmarshal the payload into the wrapper
+	// Try to log the event name if the payload looks like Amplitude-style JSON
 	var wrapper eventWrapper
-	if err := json.Unmarshal(req.Payload, &wrapper); err != nil {
-		// if the payload isn’t valid JSON, return an error response
-		return &pb.TransformResponse{
-			Status:       pb.Status_ERROR,
-			ErrorMessage: err.Error(),
-		}, nil
+	if err := json.Unmarshal(req.Payload, &wrapper); err == nil && wrapper.Context.Event != "" {
+		logging.L().Info("uppercase received event", "event", wrapper.Context.Event)
 	}
 
-	// You can now access wrapper.Context.Event
-	eventName := wrapper.Context.Event
-	log.Printf("received event %s", eventName)
+	out := req.Payload
+	// If JSON, add a marker field; otherwise uppercase bytes
+	var obj map[string]any
+	if err := json.Unmarshal(req.Payload, &obj); err == nil {
+		obj["_transformed"] = "uppercase"
+		if b, err := json.Marshal(obj); err == nil {
+			out = b
+		}
+	} else {
+		out = []byte(strings.ToUpper(string(req.Payload)))
+	}
 
-	// Do whatever transformation you need, e.g. include the event name in output
-	// or route/filter based on it. Here we’ll just return the original payload.
 	ev := &pb.Event{
 		Id:       req.Metadata.SourceOffset,
-		Value:    req.Payload, // unchanged
+		Value:    out,
 		Metadata: req.Metadata,
 	}
-	// you could also add the event name to metadata.Attributes if useful:
 	if ev.Metadata == nil {
 		ev.Metadata = &pb.EventMetadata{}
 	}
 	if ev.Metadata.Attributes == nil {
 		ev.Metadata.Attributes = map[string]string{}
 	}
-	ev.Metadata.Attributes["event_name"] = eventName
+	ev.Metadata.Attributes["transformed_by"] = "uppercase"
 
 	return &pb.TransformResponse{
 		Events: []*pb.Event{ev},

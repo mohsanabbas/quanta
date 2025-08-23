@@ -1,0 +1,31 @@
+services:
+  engine:
+    image: quanta-engine:local
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+      args:
+        BIN_DIR: bin/linux-${ARCH}
+    environment:
+      - QUANTA_PIPELINE_YML=/config/pipeline.docker.yml
+    volumes:
+      - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
+      - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
+    ports:
+      - "9100:9100"   # metrics
+    depends_on:
+      - uppercase
+
+  uppercase:
+    image: quanta-uppercase:local
+    build:
+      context: .
+      dockerfile: Dockerfile.uppercase
+      args:
+        BIN_DIR: bin/linux-${ARCH}
+    expose:
+      - "50052"
+
+networks:
+  default:
+    name: quanta-net

@@ -1,0 +1,11 @@
+# Uppercase transformer container using host-built static linux binary
+# Build the binary on host: make build-linux ARCH=arm64|amd64
+FROM gcr.io/distroless/static:nonroot
+
+ARG BIN_DIR=bin/linux-amd64
+WORKDIR /app
+COPY ${BIN_DIR}/uppercase /app/uppercase
+
+EXPOSE 50052
+USER nonroot:nonroot
+ENTRYPOINT ["/app/uppercase","--listen=:50052"]

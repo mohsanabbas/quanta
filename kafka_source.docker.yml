@@ -1,0 +1,27 @@
+# schema_version for Kafka source spec (Docker)
+schema_version: v1
+
+brokers:
+  - "host.docker.internal:9094"   # talk to host Kafka from Docker on macOS/Windows
+
+topics:
+  - "event-tracking_track-events-approved"
+
+group_id: "quanta-src-track-events-approved"
+start_from:  "oldest"
+
+version: "3.6.0"
+
+commit_mode: "auto"   # or "e2e"
+
+#backpressure:
+#  capacity: 1000
+#  check_interval: 500ms
+
+#checkpoint:
+#  commit_interval: 1s
+
+tls_enabled: false
+sasl_user:   ""
+sasl_pass:   ""
+

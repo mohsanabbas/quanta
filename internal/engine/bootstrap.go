@@ -15,22 +15,23 @@ func Bootstrap(ctx context.Context, cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("transport: %w", err)
 	}
 
-	// 2. pipeline runner (noop if no file)
-	runner := pipeline.NewRunner()
+	// 2. pipeline runner
+	var runner *pipeline.Runner
 	if cfg.PipelineYml != "" {
-		if err := pipeline.LoadYAML(cfg.PipelineYml, runner); err != nil {
+		runner, err = pipeline.Compile(cfg.PipelineYml)
+		if err != nil {
 			return nil, fmt.Errorf("pipeline: %w", err)
 		}
-	}
-	if err := runner.Start(ctx); err != nil {
-		return nil, err
+		if err := runner.Start(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	// 3. metrics
 	telemetry.Expose(cfg.MetricsPort)
 
 	return &Engine{
-		tp: srv,
-		pl: runner,
+		transport: srv,
+		runner:    runner,
 	}, nil
 }

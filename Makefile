@@ -56,5 +56,44 @@ vet:
 clean:
 	@rm -rf tools/bin
 	@rm -f coverage.out cp.out
+	@rm -rf bin
 
-.PHONY: proto tools build test vet clean
+# -------- cross-compile linux binaries for containers -----------------------
+ARCH ?= amd64
+BIN_DIR := $(CURDIR)/bin/linux-$(ARCH)
+
+build-linux: proto
+	@echo "• Building Linux $(ARCH) binaries into $(BIN_DIR)"
+	@mkdir -p $(BIN_DIR)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -trimpath -ldflags='-s -w' -o $(BIN_DIR)/engine ./cmd/engine
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -trimpath -ldflags='-s -w' -o $(BIN_DIR)/uppercase ./examples/transformers/uppercase
+	@ls -lh $(BIN_DIR)
+
+# -------- docker images ------------------------------------------------------
+ENGINE_IMG := quanta-engine:local
+UPPER_IMG  := quanta-uppercase:local
+
+.PHONY: docker-build docker-up docker-down docker-logs docker-smoke
+
+docker-build: build-linux
+	@echo "• Building Docker images (ARCH=$(ARCH))"
+	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.engine    -t $(ENGINE_IMG) .
+	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.uppercase -t $(UPPER_IMG) .
+
+# Requires Docker Desktop with Compose v2 (docker compose)
+docker-up: docker-down docker-build
+	@echo "• Starting stack"
+	@ARCH=$(ARCH) docker compose up -d --build --force-recreate
+
+docker-down:
+	@docker compose down
+
+docker-logs:
+	@docker compose logs -f --tail=200
+
+docker-smoke:
+	@echo "• Smoke-check metrics endpoint"
+	@sleep 2
+	@curl -sf http://localhost:9100/metrics | head -n 5
+
+.PHONY: proto tools build test vet clean build-linux

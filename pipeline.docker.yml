@@ -1,15 +1,15 @@
-# schema_version for pipeline spec
+# schema_version for pipeline spec (Docker)
 schema_version: v1
 
 source:
   kind: kafka
   driver: sarama
-  config: kafka_source.yml
+  config: kafka_source.docker.yml
 
 transformers:
   - name: uppercase
     type: grpc
-    address: "localhost:50052"   # for host runs; in Docker use pipeline.docker.yml with service name
+    address: "uppercase:50052"   # service name inside docker network
     max_in_flight: 100
     timeout_ms: 1000
     content_type: "application/protobuf"
@@ -25,5 +25,4 @@ debug:
   print_counter: true
   ack_batch_size: 1
   ack_flush_ms: 0
-  print_value: true
-  value_max_bytes: 180
+

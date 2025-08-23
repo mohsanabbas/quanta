@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"net"
 
-	"google.golang.org/grpc"
 	pb "quanta/api/proto/v1"
+
+	"google.golang.org/grpc"
 )
 
 type Server struct {

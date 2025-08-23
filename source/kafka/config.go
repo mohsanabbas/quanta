@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"time"
 
@@ -56,6 +57,12 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	// schema version check (only when YAML is present)
+	sv := k.String("schema_version")
+	if sv != "" && sv != "v1" {
+		return Config{}, fmt.Errorf("kafka schema_version %q not supported (want v1)", sv)
+	}
+
 	_ = k.Load(env.Provider("QUANTA_KAFKA__", "__", nil), nil)
 
 	var cfg Config

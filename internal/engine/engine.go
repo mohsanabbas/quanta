@@ -7,8 +7,8 @@ import (
 )
 
 type Engine struct {
-	tp *transport.Server
-	pl *pipeline.Runner
+	transport *transport.Server
+	runner    *pipeline.Runner
 }
 
 // Run blocks until ctx.Done().
@@ -16,9 +16,12 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		e.tp.Stop()
+		e.transport.Stop()
+		if e.runner != nil {
+			_ = e.runner.Close()
+		}
 	}()
 
 	// Blocking: serve gRPC
-	return e.tp.Serve()
+	return e.transport.Serve()
 }

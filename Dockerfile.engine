@@ -1,0 +1,14 @@
+# Engine container using host-built static linux binary
+# Build the binary on host: make build-linux ARCH=arm64|amd64
+FROM gcr.io/distroless/static:nonroot
+
+ARG BIN_DIR=bin/linux-amd64
+WORKDIR /app
+COPY ${BIN_DIR}/engine /app/engine
+
+# Configs are mounted at /config by docker-compose
+ENV QUANTA_PIPELINE_YML=/config/pipeline.docker.yml
+
+EXPOSE 7070 9100
+USER nonroot:nonroot
+ENTRYPOINT ["/app/engine"]

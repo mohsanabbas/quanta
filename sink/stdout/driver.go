@@ -2,21 +2,25 @@
 package stdout
 
 import (
-	"fmt"
+	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	pb "quanta/api/proto/v1"
+	"quanta/internal/logging"
 	"quanta/sink"
 )
 
 /* ────────── public YAML config ────────── */
 type Config struct {
-	DelayMS      int  `yaml:"delay_ms"`       // artificial per-frame delay
-	PrintCounter bool `yaml:"print_counter"`  // prepend seq#
-	BatchSize    int  `yaml:"ack_batch_size"` // 0 = disabled
-	FlushMS      int  `yaml:"ack_flush_ms"`   // 0 = disabled
+	DelayMS       int  `yaml:"delay_ms"`        // artificial per-frame delay
+	PrintCounter  bool `yaml:"print_counter"`   // prepend seq#
+	BatchSize     int  `yaml:"ack_batch_size"`  // 0 = disabled
+	FlushMS       int  `yaml:"ack_flush_ms"`    // 0 = disabled
+	PrintValue    bool `yaml:"print_value"`     // print first N bytes of value
+	ValueMaxBytes int  `yaml:"value_max_bytes"` // how many bytes to print
 }
 
 /* ────────── driver ────────── */
@@ -35,7 +39,12 @@ var seq uint64
 func (d *driver) Configure(raw any) error {
 	c, ok := raw.(Config)
 	if !ok {
-		return fmt.Errorf("stdout-sink: expected Config, got %T", raw)
+		got := reflect.TypeOf(raw).String()
+		logging.L().With("component", "sink.stdout").Error("invalid config type", "got", got)
+		return errors.New("stdout-sink: invalid config type")
+	}
+	if c.ValueMaxBytes <= 0 {
+		c.ValueMaxBytes = 120
 	}
 	d.cfg = c
 	return nil
@@ -47,11 +56,20 @@ func (d *driver) Push(f *pb.Frame) error {
 	}
 
 	if d.cfg.PrintCounter {
-		fmt.Printf("[sink %06d] %s[%d]@%d\n",
-			atomic.AddUint64(&seq, 1),
-			f.Checkpoint.GetKafka().Topic,
-			f.Checkpoint.GetKafka().Partition,
-			f.Checkpoint.GetKafka().Offset)
+		attrs := []any{
+			"topic", f.Checkpoint.GetKafka().Topic,
+			"partition", f.Checkpoint.GetKafka().Partition,
+			"offset", f.Checkpoint.GetKafka().Offset,
+			"seq", atomic.AddUint64(&seq, 1),
+		}
+		if d.cfg.PrintValue && len(f.Value) > 0 {
+			max := d.cfg.ValueMaxBytes
+			if max > len(f.Value) {
+				max = len(f.Value)
+			}
+			attrs = append(attrs, "value", string(f.Value[:max]))
+		}
+		logging.L().Info("sink stdout", attrs...)
 	}
 
 	d.mu.Lock()

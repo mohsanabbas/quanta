@@ -10,6 +10,8 @@ type debugSection struct {
 	PrintCounter    bool `yaml:"print_counter"`
 	AckBatchSize    int  `yaml:"ack_batch_size"`
 	AckFlushMS      int  `yaml:"ack_flush_ms"`
+	PrintValue      bool `yaml:"print_value"`
+	ValueMaxBytes   int  `yaml:"value_max_bytes"`
 }
 
 type TransformerSpec struct {
@@ -26,6 +28,8 @@ type TransformerSpec struct {
 }
 
 type File struct {
+	SchemaVersion string `yaml:"schema_version"`
+
 	Source struct {
 		Kind   string `yaml:"kind"`
 		Driver string `yaml:"driver"`

@@ -9,7 +9,6 @@
 
 # Go build
 /bin/
-/pkg/
 /*_test.go
 
 # Go modules

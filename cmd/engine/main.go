@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
+	"os"
 	"os/signal"
+	"quanta/internal/logging"
 	"quanta/source/kafka"
 	"syscall"
 
@@ -11,11 +12,15 @@ import (
 )
 
 func main() {
+	logging.InitFromEnv()
+	pipelinePath := os.Getenv("QUANTA_PIPELINE_YML")
+	if pipelinePath == "" {
+		pipelinePath = "pipeline.yml"
+	}
 	cfg := engine.Config{
 		GRPCPort:    7070,
 		MetricsPort: 9100,
-		PipelineYml: "pipeline.yml", // optional
-		//PipelineYml: "", // optional
+		PipelineYml: pipelinePath,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -23,10 +28,12 @@ func main() {
 
 	e, err := engine.Bootstrap(ctx, cfg)
 	if err != nil {
-		log.Fatalf("bootstrap: %v", err)
+		logging.L().Error("bootstrap failed", "err", err)
+		os.Exit(1)
 	}
 
 	if err := e.Run(ctx); err != nil {
-		log.Fatalf("engine: %v", err)
+		logging.L().Error("engine run failed", "err", err)
+		os.Exit(1)
 	}
 }

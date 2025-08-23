@@ -3,8 +3,9 @@ package transport
 import (
 	"fmt"
 
-	"google.golang.org/grpc"
 	pb "quanta/api/proto/v1"
+
+	"google.golang.org/grpc"
 )
 
 func Dial(port int) (pb.ControlClient, error) {
