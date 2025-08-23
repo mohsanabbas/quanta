@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-/* ───────────────────────── Uncapped & Capped ───────────────────────────── */
-
 type node[T any] struct {
 	pos        int64
 	payload    T
@@ -73,7 +71,6 @@ func NewCapped[T any](cap int64) *Capped[T] {
 	return &Capped[T]{u: NewUncapped[T](), cap: cap, cond: sync.NewCond(&sync.Mutex{})}
 }
 
-// Track blocks when pending+batch exceeds cap.
 func (c *Capped[T]) Track(ctx context.Context, p T, batch int64) (func() *T, error) {
 	c.cond.L.Lock()
 	defer c.cond.L.Unlock()
@@ -108,9 +105,6 @@ func (c *Capped[T]) Highest() *T {
 	return c.u.Highest()
 }
 
-/* ───────────────────────── Manager (commit helper) ────────────────────── */
-
-// Manager decides *when* a driver should flush its offsets.
 type Manager[T any] struct {
 	capped        *Capped[T]
 	commitEveryNS int64
@@ -124,9 +118,6 @@ func NewManager[T any](cap int64, commitEvery time.Duration) *Manager[T] {
 	}
 }
 
-// Track returns (resolveFn, err).
-// After the driver has successfully emitted the payload, it must call the
-// returned resolveFn(), which indicates whether a commit is now due.
 func (m *Manager[T]) Track(ctx context.Context, payload T) (resolveFn func() (highest *T, shouldCommit bool), err error) {
 	res, err := m.capped.Track(ctx, payload, 1)
 	if err != nil {

@@ -9,11 +9,11 @@ import (
 )
 
 type Options struct {
-	Level string // debug|info|warn|error
+	Level string
 	JSON  bool
 }
 
-var def atomic.Value // holds *slog.Logger
+var def atomic.Value
 
 func init() {
 	cfg := &slog.HandlerOptions{Level: slog.LevelInfo}
@@ -21,7 +21,6 @@ func init() {
 	def.Store(slog.New(h))
 }
 
-// Configure replaces the default logger.
 func Configure(opts Options) {
 	lvl := parseLevel(opts.Level)
 	cfg := &slog.HandlerOptions{Level: lvl}
@@ -48,15 +47,11 @@ func parseLevel(s string) slog.Level {
 	}
 }
 
-// L returns the configured default logger.
 func L() *slog.Logger {
 	l, _ := def.Load().(*slog.Logger)
 	return l
 }
 
-// InitFromEnv configures the logger from environment variables.
-// QUANTA_LOG_LEVEL: debug|info|warn|error (default info)
-// QUANTA_LOG_JSON:  true|false (default false)
 func InitFromEnv() {
 	lvl := os.Getenv("QUANTA_LOG_LEVEL")
 	jsonStr := os.Getenv("QUANTA_LOG_JSON")

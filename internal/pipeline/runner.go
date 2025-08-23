@@ -18,7 +18,6 @@ type Runner struct {
 	source kafka.Adapter
 	sinks  []sink.Adapter
 
-	// transformers applied in order
 	stages []transformStage
 
 	mu   sync.Mutex
@@ -38,7 +37,6 @@ func NewRunner() *Runner { return &Runner{} }
 func (r *Runner) AddSink(s sink.Adapter)    { r.sinks = append(r.sinks, s) }
 func (r *Runner) SetSource(s kafka.Adapter) { r.source = s }
 
-// AddTransformer appends a stage to the pipeline.
 func (r *Runner) AddTransformer(name string, c transform.Client, timeout time.Duration, attempts int, backoff time.Duration) {
 	r.stages = append(r.stages, transformStage{name: name, client: c, timeout: timeout, retryAttempts: attempts, retryBackoff: backoff})
 }
@@ -61,7 +59,6 @@ func (r *Runner) Ack(tok *pb.CheckpointToken) {
 	}
 }
 
-/*──────── helpers ───────*/
 func toRequest(f *pb.Frame) *pb.TransformRequest {
 	md := &pb.EventMetadata{}
 	if f.Ts != nil {
@@ -82,8 +79,8 @@ func toRequest(f *pb.Frame) *pb.TransformRequest {
 		md.Attributes["source.topic"] = k.Topic
 	}
 	return &pb.TransformRequest{
-		PipelineId: "", // optional for now
-		PluginId:   "", // filled per-stage name if needed by plugin
+		PipelineId: "",
+		PluginId:   "",
 		Payload:    f.Value,
 		Metadata:   md,
 		BatchMode:  false,
@@ -101,11 +98,11 @@ func toFrames(orig *pb.Frame, events []*pb.Event) []*pb.Frame {
 			Value:      ev.GetValue(),
 			Headers:    nil,
 			Ts:         orig.Ts,
-			Checkpoint: orig.Checkpoint, // duplicate token; acks are idempotent upstream
+			Checkpoint: orig.Checkpoint,
 		}
 		if md := ev.GetMetadata(); md != nil {
 			if md.TimestampMs > 0 {
-				// preserve original key if no ts provided
+
 				g.Ts = timestamppb.New(time.UnixMilli(md.TimestampMs))
 			}
 			if len(md.Headers) > 0 {
@@ -120,11 +117,9 @@ func toFrames(orig *pb.Frame, events []*pb.Event) []*pb.Frame {
 	return out
 }
 
-/*──────── frame routing ───────*/
 func (r *Runner) pushFrame(f *pb.Frame) error {
 	frames := []*pb.Frame{f}
 
-	// apply transformers in order; each stage can fan-out frames
 	for _, st := range r.stages {
 		next := make([]*pb.Frame, 0)
 		for _, in := range frames {
@@ -134,7 +129,7 @@ func (r *Runner) pushFrame(f *pb.Frame) error {
 			)
 
 			req := toRequest(in)
-			// set plugin id if useful for plugin
+
 			req.PluginId = st.name
 
 			attempts := st.retryAttempts
@@ -149,33 +144,31 @@ func (r *Runner) pushFrame(f *pb.Frame) error {
 					cancel()
 				}
 
-				// Transport error → retry or drop+ack
 				if err != nil {
 					if try < attempts {
 						time.Sleep(st.retryBackoff)
 						continue
 					}
-					// exhausted → drop and ack to avoid deadlock
+
 					r.Ack(in.Checkpoint)
 					resp = nil
 					break
 				}
 
-				// Handle status-based flow
 				switch resp.GetStatus() {
 				case pb.Status_OK:
-					// proceed
+
 				case pb.Status_DROP:
-					// ack and skip forwarding
+
 					r.Ack(in.Checkpoint)
 					resp.Events = nil
-					// mark as handled
-				default: // ERROR or RETRY or unknown
+
+				default:
 					if try < attempts {
 						time.Sleep(st.retryBackoff)
 						continue
 					}
-					// exhausted → drop and ack to avoid deadlock
+
 					r.Ack(in.Checkpoint)
 					resp.Events = nil
 				}
@@ -191,12 +184,11 @@ func (r *Runner) pushFrame(f *pb.Frame) error {
 		}
 		frames = next
 		if len(frames) == 0 {
-			// fully filtered
+
 			return nil
 		}
 	}
 
-	// finally, push resulting frames to all sinks
 	for _, fr := range frames {
 		for _, s := range r.sinks {
 			if err := s.Push(fr); err != nil {
@@ -215,13 +207,12 @@ func (r *Runner) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close releases resources for transformers and sinks. Idempotent.
 func (r *Runner) Close() error {
-	// close transformer clients
+
 	for _, st := range r.stages {
 		_ = st.client.Close()
 	}
-	// close sinks
+
 	for _, s := range r.sinks {
 		_ = s.Close()
 	}

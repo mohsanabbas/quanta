@@ -16,8 +16,8 @@ type debugSection struct {
 
 type TransformerSpec struct {
 	Name        string `yaml:"name"`
-	Type        string `yaml:"type"`    // "inproc", "grpc", "stdio", etc.
-	Address     string `yaml:"address"` // e.g. "localhost:50051"
+	Type        string `yaml:"type"`
+	Address     string `yaml:"address"`
 	MaxInFlight int    `yaml:"max_in_flight"`
 	TimeoutMS   int    `yaml:"timeout_ms"`
 	ContentType string `yaml:"content_type"`
@@ -36,7 +36,6 @@ type File struct {
 		Config string `yaml:"config"`
 	} `yaml:"source"`
 
-	// Ordered list of transform plugins applied between source and sinks.
 	Transformers []TransformerSpec `yaml:"transformers"`
 
 	Sinks       []string     `yaml:"sinks"`

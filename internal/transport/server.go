@@ -23,8 +23,7 @@ func StartServer(port int) (*Server, error) {
 		grpc: grpc.NewServer(),
 		lis:  lis,
 	}
-	// register empty services; real impl later
-	//pb.RegisterConnectorServer(s.grpc, UnimplementedConnector{})
+
 	pb.RegisterControlServer(s.grpc, UnimplementedControl{})
 	return s, nil
 }
@@ -35,8 +34,6 @@ func (s *Server) Serve() error {
 func (s *Server) Stop() {
 	s.grpc.GracefulStop()
 }
-
-// ----- stubs --------------------------------------------------------------
 
 type UnimplementedConnector struct {
 	pb.UnimplementedConnectorServer

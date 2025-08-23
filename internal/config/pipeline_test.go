@@ -19,7 +19,7 @@ sinks: [stdout]
 	if err := os.WriteFile(filepath.Join(dir, "pipeline.yml"), pipe, 0o644); err != nil {
 		t.Fatalf("write pipeline: %v", err)
 	}
-	// create a dummy kafka_source.yml next to it
+
 	if err := os.WriteFile(filepath.Join(dir, "kafka_source.yml"), []byte("schema_version: v1\n"), 0o644); err != nil {
 		t.Fatalf("write kafka cfg: %v", err)
 	}

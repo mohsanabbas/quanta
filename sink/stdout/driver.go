@@ -13,29 +13,26 @@ import (
 	"quanta/sink"
 )
 
-/* ────────── public YAML config ────────── */
 type Config struct {
-	DelayMS       int  `yaml:"delay_ms"`        // artificial per-frame delay
-	PrintCounter  bool `yaml:"print_counter"`   // prepend seq#
-	BatchSize     int  `yaml:"ack_batch_size"`  // 0 = disabled
-	FlushMS       int  `yaml:"ack_flush_ms"`    // 0 = disabled
-	PrintValue    bool `yaml:"print_value"`     // print first N bytes of value
-	ValueMaxBytes int  `yaml:"value_max_bytes"` // how many bytes to print
+	DelayMS       int  `yaml:"delay_ms"`
+	PrintCounter  bool `yaml:"print_counter"`
+	BatchSize     int  `yaml:"ack_batch_size"`
+	FlushMS       int  `yaml:"ack_flush_ms"`
+	PrintValue    bool `yaml:"print_value"`
+	ValueMaxBytes int  `yaml:"value_max_bytes"`
 }
 
-/* ────────── driver ────────── */
 type driver struct {
 	cfg Config
 	ack sink.EmitFn
 
-	mu      sync.Mutex // guards pending+timer
+	mu      sync.Mutex
 	pending []*pb.CheckpointToken
-	timer   *time.Timer // nil → no timer armed
+	timer   *time.Timer
 }
 
 var seq uint64
 
-/* ────────── sink.Adapter ────────── */
 func (d *driver) Configure(raw any) error {
 	c, ok := raw.(Config)
 	if !ok {
@@ -75,14 +72,12 @@ func (d *driver) Push(f *pb.Frame) error {
 	d.mu.Lock()
 	d.pending = append(d.pending, f.Checkpoint)
 
-	/* 1. flush on batch size */
 	if d.cfg.BatchSize > 0 && len(d.pending) >= d.cfg.BatchSize {
 		d.flushLocked()
 		d.mu.Unlock()
 		return nil
 	}
 
-	/* 2. (re)-arm the one-shot timer if needed */
 	if d.cfg.FlushMS > 0 && d.timer == nil {
 		d.timer = time.AfterFunc(
 			time.Duration(d.cfg.FlushMS)*time.Millisecond,
@@ -100,19 +95,14 @@ func (d *driver) Close() error {
 	return nil
 }
 
-/* ────────── sink.AckAware ────────── */
 func (d *driver) BindAck(fn sink.EmitFn) { d.ack = fn }
 
-/* ────────── internals ────────── */
-
-// called by the background timer goroutine
 func (d *driver) timerFlush() {
 	d.mu.Lock()
 	d.flushLocked()
 	d.mu.Unlock()
 }
 
-// must be called with d.mu *held*
 func (d *driver) flushLocked() {
 	if len(d.pending) == 0 || d.ack == nil {
 		d.stopTimerLocked()
@@ -122,7 +112,7 @@ func (d *driver) flushLocked() {
 		d.ack(t)
 	}
 	d.pending = d.pending[:0]
-	d.stopTimerLocked() // re-arm on next Push if needed
+	d.stopTimerLocked()
 }
 
 func (d *driver) stopTimerLocked() {
@@ -132,7 +122,6 @@ func (d *driver) stopTimerLocked() {
 	}
 }
 
-/* ────────── auto-register ────────── */
 func init() {
 	sink.Register("stdout", func() sink.Adapter { return &driver{} })
 }

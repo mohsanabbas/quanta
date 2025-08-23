@@ -11,7 +11,6 @@ type Engine struct {
 	runner    *pipeline.Runner
 }
 
-// Run blocks until ctx.Done().
 func (e *Engine) Run(ctx context.Context) error {
 
 	go func() {
@@ -22,6 +21,5 @@ func (e *Engine) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Blocking: serve gRPC
 	return e.transport.Serve()
 }

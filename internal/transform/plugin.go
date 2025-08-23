@@ -1,7 +1,5 @@
 package transform
 
-// Client wraps a plugin (over gRPC, stdio, or in‑process) and exposes a uniform API.
-// The engine can swap transport implementations behind this interface.
 import (
 	"context"
 	"fmt"
@@ -19,7 +17,6 @@ type Client interface {
 	Close() error
 }
 
-// GRPCClient dials a plugin over gRPC.
 type GRPCClient struct {
 	conn *grpc.ClientConn
 	svc  pb.TransformServiceClient
@@ -58,7 +55,6 @@ func (c *GRPCClient) Close() error {
 	return nil
 }
 
-// InProcessClient adapts an in‑proc plugin compiled into the engine.
 type InProcessClient struct {
 	impl Transformer
 }

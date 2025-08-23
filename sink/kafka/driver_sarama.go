@@ -10,7 +10,7 @@ import (
 type Config struct {
 	Brokers []string `yaml:"brokers"`
 	Topic   string   `yaml:"topic"`
-	Acks    int16    `yaml:"required_acks"` // 0,1,-1
+	Acks    int16    `yaml:"required_acks"`
 }
 
 type driver struct {

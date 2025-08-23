@@ -12,8 +12,6 @@ import (
 
 const SupportedSchema = "v1"
 
-// LoadPipelineSpec parses a pipeline YAML, validates schema_version, and
-// returns the parsed spec and an absolute path to the source config (if set).
 func LoadPipelineSpec(path string) (spec.File, string, error) {
 	var cfg spec.File
 	raw, err := os.ReadFile(path)

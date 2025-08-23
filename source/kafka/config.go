@@ -15,40 +15,34 @@ import (
 type CommitMode string
 
 const (
-	CommitAuto CommitMode = "auto" // like today
-	CommitE2E  CommitMode = "e2e"  // wait for Ack
+	CommitAuto CommitMode = "auto"
+	CommitE2E  CommitMode = "e2e"
 )
 
 type BackPressureCfg struct {
-	Capacity int64         `koanf:"capacity"`       // max unresolved frames
-	CheckInt time.Duration `koanf:"check_interval"` // refill tick
+	Capacity int64         `koanf:"capacity"`
+	CheckInt time.Duration `koanf:"check_interval"`
 }
 
 type CheckpointCfg struct {
-	CommitInt time.Duration `koanf:"commit_interval"` // flush cadence
+	CommitInt time.Duration `koanf:"commit_interval"`
 }
 
 type Config struct {
 	Brokers   []string `koanf:"brokers"`
 	Topics    []string `koanf:"topics"`
 	GroupID   string   `koanf:"group_id"`
-	StartFrom string   `koanf:"start_from"` // oldest|newest (default newest)
+	StartFrom string   `koanf:"start_from"`
 	Version   string   `koanf:"version"`
 	TLSEn     bool     `koanf:"tls_enabled"`
 	SASLUser  string   `koanf:"sasl_user"`
 	SASLPass  string   `koanf:"sasl_pass"`
 
-	CommitMode   CommitMode      `koanf:"commit_mode"` // auto|e2e
+	CommitMode   CommitMode      `koanf:"commit_mode"`
 	BackPressure BackPressureCfg `koanf:"backpressure"`
 	Checkpoint   CheckpointCfg   `koanf:"checkpoint"`
 }
 
-// ---------------------------------------------------------------------------
-// Loader
-// ---------------------------------------------------------------------------
-
-// LoadConfig merges YAML (if present) with env-vars
-// (prefix `QUANTA_KAFKA__`, delimiter `__`).
 func LoadConfig(path string) (Config, error) {
 	k := koanf.New(".")
 	if path != "" {
@@ -57,7 +51,7 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
-	// schema version check (only when YAML is present)
+
 	sv := k.String("schema_version")
 	if sv != "" && sv != "v1" {
 		return Config{}, fmt.Errorf("kafka schema_version %q not supported (want v1)", sv)
@@ -75,10 +69,6 @@ func LoadConfig(path string) (Config, error) {
 	applyDefaults(&cfg)
 	return cfg, nil
 }
-
-// ---------------------------------------------------------------------------
-// defaults
-// ---------------------------------------------------------------------------
 
 func applyDefaults(c *Config) {
 	if c.BackPressure.Capacity == 0 {

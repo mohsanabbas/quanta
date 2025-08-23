@@ -14,7 +14,7 @@ import (
 
 type fakeTransform struct {
 	calls int32
-	mode  string // ok|drop|errorThenOK|fanout2
+	mode  string
 }
 
 func (f *fakeTransform) Metadata(ctx context.Context) (*pb.MetadataResponse, error) {
@@ -45,8 +45,6 @@ func (f *fakeTransform) Transform(ctx context.Context, req *pb.TransformRequest)
 		return &pb.TransformResponse{Status: pb.Status_OK, Events: []*pb.Event{{Value: append([]byte{}, req.Payload...)}}}, nil
 	}
 }
-
-// fake sink that immediately acks and captures pushed frames
 
 type captureSink struct {
 	pushed []*pb.Frame
@@ -83,7 +81,7 @@ func TestRunner_TransformerOK_ForwardsAndSinkAcks(t *testing.T) {
 	if len(cs.pushed) != 1 {
 		t.Fatalf("expected 1 pushed frame, got %d", len(cs.pushed))
 	}
-	if string(cs.pushed[0].Value) != "hello" { // unchanged content for ok path in this fake
+	if string(cs.pushed[0].Value) != "hello" {
 		t.Fatalf("unexpected value: %q", cs.pushed[0].Value)
 	}
 }
@@ -108,7 +106,7 @@ func TestRunner_TransformerDrop_AcksNoPush(t *testing.T) {
 func TestRunner_TransformerRetryThenOK(t *testing.T) {
 	r := NewRunner()
 	fake := &fakeTransform{mode: "errorThenOK"}
-	// attempts=1 allows one retry after the first error
+
 	r.AddTransformer("t1", fake, 100*time.Millisecond, 1, 1*time.Millisecond)
 	cs := &captureSink{}
 	cs.BindAck(r.Ack)
@@ -125,7 +123,7 @@ func TestRunner_TransformerRetryThenOK(t *testing.T) {
 
 func TestRunner_MultiStageFanout(t *testing.T) {
 	r := NewRunner()
-	// stage1 fan-out to 2 events, stage2 pass-through (ok)
+
 	stage1 := &fakeTransform{mode: "fanout2"}
 	stage2 := &fakeTransform{mode: "ok"}
 	r.AddTransformer("s1", stage1, 100*time.Millisecond, 0, 0)

@@ -15,7 +15,6 @@ import (
 
 const supportedPipelineSchema = "v1"
 
-// Compile reads a pipeline YAML, constructs a Runner with source, transformers, and sinks, and returns it.
 func Compile(path string) (*Runner, error) {
 	r := NewRunner()
 	if err := LoadYAML(path, r); err != nil {
@@ -24,15 +23,12 @@ func Compile(path string) (*Runner, error) {
 	return r, nil
 }
 
-// LoadYAML configures the provided Runner instance from a YAML file.
-// Deprecated: prefer Compile(path) to construct a self-contained Runner.
 func LoadYAML(path string, r *Runner) error {
 	cfg, confPath, err := config.LoadPipelineSpec(path)
 	if err != nil {
 		return err
 	}
 
-	/*──────── source (Kafka only for v0.1) ───────*/
 	if cfg.Source.Kind != "kafka" {
 		return fmt.Errorf("unsupported source %q", cfg.Source.Kind)
 	}
@@ -50,12 +46,10 @@ func LoadYAML(path string, r *Runner) error {
 	}
 	r.SetSource(src)
 
-	// driver may want ConnectorAck
 	if aw, ok := src.(interface{ OnAck(*pb.ConnectorAck) }); ok {
 		r.SubscribeAck(aw.OnAck)
 	}
 
-	/*──────── transformers ───────*/
 	for _, t := range cfg.Transformers {
 		switch t.Type {
 		case "grpc":
@@ -72,7 +66,6 @@ func LoadYAML(path string, r *Runner) error {
 		}
 	}
 
-	/*──────── sinks ───────*/
 	for _, name := range cfg.Sinks {
 		sDrv, err := sink.NewAdapter(name)
 		if err != nil {
@@ -91,11 +84,6 @@ func LoadYAML(path string, r *Runner) error {
 				ValueMaxBytes: cfg.Debug.ValueMaxBytes,
 			})
 
-		/* future:
-		case "kafka":
-			err = sDrv.Configure(cfg.SinkConfigs.Kafka)
-		*/
-
 		default:
 			err = fmt.Errorf("no config block for sink %q", name)
 		}
@@ -103,7 +91,6 @@ func LoadYAML(path string, r *Runner) error {
 			return err
 		}
 
-		// If the sink supports acks, bind it.
 		if ackAware, ok := sDrv.(sink.AckAware); ok {
 			ackAware.BindAck(r.Ack)
 		}

@@ -33,11 +33,9 @@ func TestSaramaDriver_AckCallbackProcessed(t *testing.T) {
 	rec := recordID{"t", 2, 99}
 	d.pending[rec] = func() { atomic.AddInt32(&called, 1) }
 
-	// enqueue via OnAck
 	tok := makeKafkaToken(rec.topic, rec.partition, rec.offset)
 	d.OnAck(&pb.ConnectorAck{Checkpoint: tok})
 
-	// simulate group handler ack path
 	got := <-d.ackCh
 	if got != rec {
 		t.Fatalf("unexpected rec from ackCh: %+v", got)

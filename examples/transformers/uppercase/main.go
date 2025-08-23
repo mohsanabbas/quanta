@@ -52,8 +52,6 @@ func main() {
 	}
 }
 
-// A small struct to pull an event name for logging if present
-// { "context": { "event": "..." } }
 type eventWrapper struct {
 	Context struct {
 		Event string `json:"event"`
@@ -61,14 +59,14 @@ type eventWrapper struct {
 }
 
 func (p *UppercasePlugin) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
-	// Try to log the event name if the payload looks like Amplitude-style JSON
+
 	var wrapper eventWrapper
 	if err := json.Unmarshal(req.Payload, &wrapper); err == nil && wrapper.Context.Event != "" {
 		logging.L().Info("uppercase received event", "event", wrapper.Context.Event)
 	}
 
 	out := req.Payload
-	// If JSON, add a marker field; otherwise uppercase bytes
+
 	var obj map[string]any
 	if err := json.Unmarshal(req.Payload, &obj); err == nil {
 		obj["_transformed"] = "uppercase"
@@ -97,6 +95,3 @@ func (p *UppercasePlugin) Transform(ctx context.Context, req *pb.TransformReques
 		Status: pb.Status_OK,
 	}, nil
 }
-
-//go build -o uppercase ./quanta/examples/transformers/uppercase
-//./uppercase --listen=:50051

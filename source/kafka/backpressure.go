@@ -16,7 +16,6 @@ type Controller struct {
 	closed bool
 }
 
-// NewController creates a token-bucket that refills `refill` tokens every `tick`.
 func NewController(cap, refill int64, tick time.Duration) *Controller {
 	c := &Controller{
 		capacity: cap,
@@ -44,7 +43,6 @@ func NewController(cap, refill int64, tick time.Duration) *Controller {
 	return c
 }
 
-// Acquire blocks until at least 1 token is available or ctx is done.
 func (c *Controller) Acquire(ctx context.Context) error {
 	c.mu.Lock()
 	for c.tokens == 0 && ctx.Err() == nil {
@@ -59,7 +57,6 @@ func (c *Controller) Acquire(ctx context.Context) error {
 	return nil
 }
 
-// TryAcquire is non-blocking; returns true if it got a token.
 func (c *Controller) TryAcquire(n int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
