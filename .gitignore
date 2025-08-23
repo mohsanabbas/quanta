@@ -1,0 +1,54 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build
+/bin/
+/pkg/
+/*_test.go
+
+# Go modules
+go.sum
+
+# VS Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Logs and temp files
+*.log
+tmp/
+*.tmp
+
+# Protobuf generated files (if you keep generated code out of VCS)
+# If you DO want to track generated pb files, remove these lines.
+api/proto/**/*.pb.go
+api/proto/**/*.pb.gw.go
+api/proto/**/*.grpc.pb.go
+
+# Generated gRPC/proto plugin bins often placed in tools/bin
+tools/bin/
+
+# Editor swap/backup files
+*.swp
+*.swo
+
+# Docker
+.env
+docker-compose.override.yml
+
+# IDE/project specific
+*.local
