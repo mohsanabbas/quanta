@@ -1,5 +1,4 @@
 
----
 
 # Quanta System Architecture and Design
 
@@ -9,55 +8,53 @@ Quanta is a modular streaming/event‑processing engine written in Go.  It consu
 
 ## High‑Level Architecture
 
-At a high level the system consists of several distributed components connected via gRPC or message‑queue protocols.  The diagram below shows how data and control signals flow between them:
+At a high level the system consists of several distributed components connected via the Kafka protocol, gRPC and HTTP.  The diagram below illustrates the actual communication paths and highlights that acknowledgements flow back to the source adapter via an in‑process callback rather than over the network:
 
 ```
-                    +----------------------+
-                    |    Control Clients   |
-                    +----------+-----------+
-                               |           \
-                               | gRPC + HTTP \
-                               v             \
-+----------------------+    +--------------------------+
-|    Kafka Broker(s)   |--->|    Quanta Engine         |
-+----------+-----------+    |  (Pipeline Runner)       |
-           |                | +--------------------+   |
-           | events         | |    Source Adapter  |   |
-           v                | +---------+----------+   |
- +--------------------+     |           |              |
- | Transformer        |<---+-----------+|              |
- | Plugin Processes   |     |           v              |
- +--------------------+     |  +-------+----------+    |
-                            |  | Transform Stages |    |
-                            |  +--------+---------+    | 
-                            |           |              |
-                            |           v              |
-                            |     +-----------+        |
-                            |     |   Sinks   |       |
-                            |     +-----------+        |
-                            +--------------------------+ 
+                     +----------------------+
+                     |    Control Clients   |
+                     +----------+-----------+
+                                | gRPC
+                                v
+  +----------------------+   +------------------------+
+  |   Kafka Broker(s)    |-->|     Quanta Engine      |
+  +----------+-----------+   | (Runner + Control svc) |
+             | events         +----+----------+-------+
+             |                     |          |       \
+             v                     |          |        \
+  (ack) <--------------------------+          |         \
+ +---------+                       |          | gRPC     \
+ |  Sinks  |<-- ack callback (in‑proc)         v          \
+ +---------+                       |    +------------------+
+                                   |    | Transformer      |
+                                   |    | Plugin Processes |
+                                   |    +------------------+
+                                   |
+                                   +--> /metrics (HTTP)
 ```
 
-**Figure 1 – High‑level architecture.**  The Quanta engine sits between the Kafka broker and the sinks.  It pulls events from Kafka, invokes transformer plugins via gRPC, and pushes the results to sinks.  Control clients communicate with the engine’s gRPC server to deploy/pause pipelines and scrape metrics.  Each transformer stage may connect to a different plugin process.
+**Figure 1 – High‑level architecture.**  The Quanta engine sits between the Kafka broker and the sinks.  It pulls events from Kafka, invokes transformer plugins via gRPC, and pushes the results to sinks.  Control clients communicate with the engine’s **Control** gRPC service to deploy or pause pipelines.  A Prometheus scrape target is provided via the **/metrics** HTTP endpoint.  Acknowledgement tokens emitted by sinks are delivered back to the Kafka source via an **in‑process callback**  there is no external Connector service.  Only the Control service is registered on the gRPC server `Health` and `Connector` services exist in the protobuf definitions but are not wired into the server.
 
 ### Explanation of Components
 
-* **Kafka broker(s)** – External message queues from which the engine reads records.  The source adapter encapsulates the Kafka client and translates each record into a `Frame` object with a payload, timestamp and checkpoint information.
+**Kafka broker(s)** – External message queues from which the engine reads records.  The source adapter encapsulates the Kafka client and translates each record into a `Frame` object with a payload, timestamp and checkpoint information.
 
-* **Quanta engine** – A single Go process comprising the bootstrap logic, pipeline runner, control gRPC server and metrics HTTP endpoint.  The engine loads a pipeline specification from YAML, constructs a `Runner` with a source, an ordered list of transformer stages and one or more sinks, then starts processing frames.
+**Quanta engine** – A single Go process comprising the bootstrap logic, pipeline runner, control gRPC server and metrics HTTP endpoint.  The engine loads a pipeline specification from YAML, constructs a `Runner` with a source, an ordered list of transformer stages and one or more sinks, then starts processing frames.
 
-* **Transformer plugin processes** – External binaries that implement the `TransformService` defined in `transformer.proto`.  Each receives a `TransformRequest` and returns a `TransformResponse` with zero or more events and a status (OK/DROP/RETRY/ERROR).  The runner connects to each plugin via gRPC using a separate `transform.Client` instance.
+**Transformer plugin processes** – External binaries that implement the `TransformService` defined in `transformer.proto`.  Each receives a `TransformRequest` and returns a `TransformResponse` with zero or more events and a status (OK/DROP/RETRY/ERROR).  The runner connects to each plugin via gRPC using a separate `transform.Client` instance.
 
-* **Sinks** – Components that emit frames to downstream systems.  The current implementation provides a `stdout` sink  future sinks may write to Kafka, HTTP endpoints or storage services.  Each sink implements an adapter interface with methods `Configure`, `Push` and `Close`.
+**Sinks** – Components that emit frames to downstream systems.  The current implementation provides a `stdout` sink  future sinks may write to Kafka, HTTP endpoints or storage services.  Each sink implements an adapter interface with methods `Configure`, `Push` and `Close`.
 
-* **Control & Metrics** – The engine exposes a gRPC server that implements ping/deploy/pause and health checks, and an HTTP endpoint that exposes Prometheus metrics.  Control clients use these APIs to manage pipelines and monitor health.
+**Control & Metrics** – The engine exposes a gRPC **Control** service that implements ping/deploy/pause operations and an HTTP endpoint that exposes Prometheus metrics.  Although a `Health` service is defined in the proto, it is not registered in the current server.  Control clients use these APIs to manage pipelines and monitor health indirectly via metrics.
+
+**Acknowledgements and Connector service** – When a sink finishes processing a frame it calls a bound callback to emit a `CheckpointToken` back to the runner.  The runner in turn forwards this token to the source adapter so that the Kafka offset can be committed.  This acknowledgement path happens entirely within the engine  although a `Connector` gRPC service is defined in the proto, it is not currently registered on the server.
 
 ## Engine Bootstrap
 
 The engine bootstrap code (in `internal/engine`) performs the following steps:
 
 1. **Load configuration** – Reads environment variables and command‑line flags to determine the gRPC and metrics ports and the path to the pipeline YAML.  It sets up TLS if required.
-2. **Start transport server** – Launches a gRPC server that serves control, connector and health RPCs.  The control service implements ping, deploy and pause operations  the connector service allows sinks to acknowledge checkpoints back to the source  the health service reports liveness.
+2. **Start transport server** – Launches a gRPC server and registers the **Control** service.  Although `Health` and `Connector` services exist in the proto definitions, only the Control service is currently registered.  The control service implements ping, deploy and pause operations.  Acknowledgements from sinks are handled via an in‑process callback rather than via a `Connector` RPC.
 3. **Compile the pipeline** – Loads the YAML specification and constructs a `Runner` with a source adapter, transformer stages and sinks.  The compiler dials each plugin address and wraps it in a `transform.Client`.
 4. **Start metrics endpoint** – Exposes Prometheus counters and histograms via an HTTP server.
 5. **Run the pipeline** – Invokes `Runner.Start(ctx)` to begin consuming frames.  When the context is cancelled, it gracefully stops the runner and the gRPC server.
@@ -88,46 +85,45 @@ This approach allows multiple transformers to be configured for a single pipelin
 The `Runner` is responsible for pulling frames from the source, applying transformations and pushing the results to sinks.  It maintains slices of sources, transformer stages and sinks, along with ACK handling.  The following ASCII diagram illustrates the runner’s internal structure and data flow:
 
 ```
-             +-----------------------------------------------------------+
-             |                          Runner                          |
-             +------------------+------------------+--------------------+
-             |     Source       |   Transform      |       Sinks        |
-             |     Adapter      |     Stages       |                    |
-             +---------+--------+---------+--------+---------+----------+
-                       |                  |                    |
-          Frame ──────►|                  |                    |
-                       v                  v                    v
-        +------------+    +----------------------------+   +-----------+
-        |  Source    |    |  TransformStage[0]         |   |  Sink[0]  |
-        |  Adapter   |    |  - name: upper             |   |  (stdout) |
-        +------+-----+    |  - client: gRPC client     |   +-----------+
-               |          |  - timeout: 1s             |
-               v          |  - retries: 3              |
-        Kafka record      |  - backoff_ms: 200         |
-        converted to      +--------------+-------------+
-        Frame             |              v
-                          |       gRPC call to plugin
-                          v              
-                +----------------------------+       +-----------+
-                | TransformStage[1]          |  ...  |  Sink[n]  |
-                |  - name: enrich            |       +-----------+
-                |  - client: gRPC client     |
-                |  - timeout: 2s             |
-                |  - retries: 5              |
-                +----------------------------+
+             +-------------------------------------------------------------------+
+             |                              Runner                               |
+             +----------+------------+------------+------------+-----------------+
+                        |            |            |            |               
+                        v            v            v            v               
+                  +-----------+  +-------------+  +--------+  +--------------+ 
+                  |  Source   |->| Stage[0]    |->|  ...   |->| Stage[N]     | 
+                  |  Adapter  |  | (plugin0)   |  |        |  | (pluginN)    | 
+                  +-----+-----+  +-------------+  +--------+  +--------------+ 
+                        |              |             |             |            
+                        |              v             v             v            
+                     frame        gRPC call    gRPC call    gRPC call         
+                      │ toRequest   to Plugin0   to Plugin1   to PluginN       
+                      │             (unary)       (unary)       (unary)        
+                      │                            ...                          
+                      v                                                     
+                  +---------+                                               
+                  |  Sinks  |                                               
+                  +----+----+                                               
+                       |                                                    
+                       | ack callback (in‑proc)                             
+                       v                                                    
+                 +-------------+                                            
+                 | Source      |                                            
+                 | Adapter ACK |                                            
+                 +-------------+                                            
 ```
 
-**Figure 2 – Runner internal structure.**  Each incoming frame is passed sequentially through the source adapter and each transform stage.  A `TransformStage` holds its name, a `transform.Client`, timeout and retry policy.  The runner’s `pushFrame` method converts a frame into a `TransformRequest`, calls the plugin via gRPC, handles statuses (OK, DROP, RETRY, ERROR) and converts returned events back into frames.  Only after a frame has successfully traversed all stages is it forwarded to sinks and acknowledged to the source.
+**Figure 2 – Runner internal structure.**  Each incoming frame is converted into a `TransformRequest` and passed sequentially through the source adapter and each transform stage.  A `TransformStage` holds its name, a `transform.Client`, timeout and retry/backoff policy.  For each stage the runner calls the plugin via the unary `Transform` RPC  it handles statuses (OK, DROP, RETRY, ERROR) and converts returned events back into frames.  Only after a frame has successfully traversed all stages is it forwarded to sinks.  Sinks may emit an acknowledgement via a bound callback  the runner passes the resulting `CheckpointToken` back to the source adapter to commit the Kafka offset.  All acknowledgement handling happens within the engine process.
 
 ## Kafka Source Adapter
 
 The Kafka adapter (in `source/kafka`) abstracts the details of consuming records from a Kafka cluster.  It exposes a `Run(ctx, emit func(*Frame))` method that subscribes to the configured topic(s), converts each record into a `Frame` and calls the supplied `emit` callback.  The `Frame` includes:
 
-* **Value** – event payload (as bytes).
-* **Key** – partitioning key.
-* **Headers** – map of Kafka headers.
-* **Ts** – timestamp.
-* **Checkpoint** – topic, partition and offset, used for acknowledging processed frames.
+* `Value` – event payload (as bytes).
+* `Key` – partitioning key.
+* `Headers` – map of Kafka headers.
+* `Ts` – timestamp.
+* `Checkpoint` – topic, partition and offset, used for acknowledging processed frames.
 
 The adapter runs in a dedicated goroutine.  When the runner acknowledges a frame, the adapter commits the corresponding offset to Kafka to ensure at‑least‑once semantics.
 
@@ -141,7 +137,7 @@ Transformer stages are decoupled from their transport via the `transform.Client`
 * `Stream(ctx, ...)` – bidirectional streaming RPC (future use).
 * `Close()` – closes underlying connections.
 
-The default implementation is a gRPC client (`GRPCClient`) that dials the plugin’s address and forwards calls to the generated gRPC stub.  An `InProcessClient` wraps a Go implementation compiled into the engine.  Additional transports such as stdio or shared memory can be added by implementing this interface.
+The default implementation is a gRPC client (`GRPCClient`) that dials the plugin’s address and forwards calls to the generated gRPC stub.  An `InProcessClient` wraps a Go implementation compiled into the engine.  Additional transports such as stdio or shared memory can be added by implementing this interface.  Although the `Stream` method is defined on the interface to support future streaming transforms, the current engine uses only the unary `Transform` RPC  streaming mode is not yet implemented in the runner.
 
 ## Transformer Plugins
 
@@ -155,51 +151,48 @@ A typical plugin parses the payload, applies domain logic and returns transforme
 
 ## Sinks
 
-Sinks consume frames emitted by the runner and forward them to downstream systems.  Each sink implements an adapter interface with methods:
+Sinks consume frames emitted by the runner and forward them to downstream systems.  Each sink implements an adapter interface with the following methods:
 
-* `Configure(ctx, spec)` – initialises the sink with configuration from the YAML file.
+* `Configure(any) error` – initialises the sink using a configuration object (the concrete type depends on the sink).  Configuration is passed as an opaque `any` rather than a context/spec pair  callers must construct the appropriate config before calling this method.
 * `Push(*Frame) error` – sends a frame to the sink.  The sink may batch frames or perform asynchronous writes.
-* `Close()` – flushes outstanding data and releases resources.
-* `BindAck(func(*ConnectorAck))` – optional: binds a callback that allows the sink to acknowledge processed frames back to the source via the connector service.
+* `Close() error` – flushes outstanding data and releases resources.
+
+Sinks that need to propagate acknowledgements implement the separate `AckAware` interface, which defines:
+
+* `BindAck(func(*pb.CheckpointToken))` – binds a callback that is invoked whenever the sink finishes processing a frame.  This callback allows the sink to send acknowledgement tokens back to the source adapter through the runner.
 
 The current implementation includes an `stdout` sink that prints each frame and batches acknowledgements.  Additional sinks can be implemented to write to Kafka producers, HTTP endpoints, filesystems or databases.
 
 ## Control Plane & Metrics
 
-The engine exposes a gRPC control plane and a health check service defined in `control.proto` and `health.proto`.  Control clients can:
+The engine exposes a **Control** gRPC service defined in `control.proto`.  Although `Health` and `Connector` services exist in the protobuf definitions, only the Control service is currently registered on the gRPC server.  Control clients can:
 
 * **Ping** – check if the engine is responding.
 * **Deploy** – push a new pipeline specification to the engine (not yet fully implemented).
 * **Pause/Resume** – pause or resume a running pipeline.
-* **Liveness check** – query the engine’s health status.
 
-Prometheus metrics are exposed via an HTTP endpoint.  Counters track total processed frames, dropped frames, retry counts and errors per stage  histograms measure processing latency.  These metrics allow operators to monitor pipeline health and tune performance.
+Prometheus metrics are exposed via an HTTP endpoint at `/metrics`.  Counters track total processed frames, dropped frames, retry counts and errors per stage  histograms measure processing latency.  These metrics allow operators to monitor pipeline health and tune performance.
 
 ## Distributed Components & Communication
 
-The following ASCII diagram shows how distributed components communicate over the network:
+The following ASCII diagram shows the actual communication paths between distributed components:
 
 ```
-    Kafka Protocol (TCP)          gRPC per transformer            Sink Protocol
-   +------------------+           +---------------------+          +-----------------+
-   |  Kafka Broker(s) |--------->|  Quanta Engine      |---------->|  Sink Adapter   |
-   +------------------+          +---------+-----------+           +---------+-------+
-                                      |   |                            |
-                                      |   | gRPC                       |
-                                      |   v                            |
-                                      | +-------------------+          |
-                                      +-| Transformer Plugin|          |
-                                        +-------------------+          |
-                                              |                        |
-                                              gRPC                     |
-                                              |                        |
-                                              v                        v
-                                       +------------------+    +-----------------+
-                                       | Control Clients  |    | Prometheus      |
-                                       +------------------+    +-----------------+
+      Kafka (TCP)        gRPC (transform)      internal (sinks)     gRPC       HTTP
+   +---------------+    +------------------+    +---------------+   +-------+  +-------+
+   | Kafka Broker  |--->|   Quanta Engine  |--->|     Sinks     |<--|Control|  |Metrics|
+   +---------------+    +--------+---------+    +---------------+   +-------+  +-------+
+                             |         ^                ^
+                             |         |                |
+                             | gRPC    | ack callback   |
+                             v         |                |
+                         +---------+   |                |
+                         | Plugins  |<--+               |
+                         +---------+                    |
+                         (per transformer)              |
 ```
 
-**Figure 3 – Distributed communications.**  The source adapter consumes records from Kafka over the Kafka protocol.  For each transform stage, the runner establishes a gRPC connection to the plugin process.  After transformation, frames are delivered to sinks using the sink’s protocol (stdout is local  future sinks may use HTTP or another Kafka producer).  Separate control clients manage pipelines and scrape metrics via gRPC/HTTP.
+**Figure 3 – Distributed communications.**  The source adapter consumes records from Kafka over the Kafka protocol.  For each transform stage the runner opens a gRPC connection to the corresponding plugin process.  After transformation, frames are delivered to sinks using an in‑process call  the sink may bind an acknowledgement callback to return a checkpoint token back to the source adapter.  Control clients communicate via gRPC to manage pipelines, and Prometheus scrapes metrics via an HTTP `/metrics` endpoint.
 
 ## Frame Lifecycle
 
@@ -225,14 +218,31 @@ Sink(s) → Output + optional ACK
 2. The runner wraps the payload and metadata into a `TransformRequest` and calls the first transformer stage.  The request includes the pipeline ID, plugin ID, payload and event metadata.
 3. The plugin processes the request and returns a `TransformResponse` with zero or more events and a status.  The runner handles `OK`, `DROP`, `RETRY` and `ERROR` statuses accordingly.
 4. The runner converts each returned event back into a `Frame` and passes it to the next stage.  This process repeats for all stages.
-5. When all stages succeed, the resulting frames are pushed to sinks.  Sinks may emit acknowledgements to the source via the connector service, allowing the Kafka adapter to commit offsets.
+5. When all stages succeed, the resulting frames are pushed to sinks.  If a sink implements `AckAware`, it will invoke a callback with a `CheckpointToken` when it finishes processing  the runner passes this token back to the source adapter so that the Kafka offset can be committed.
 
 ## Extensibility and Scalability
 
 Quanta’s design intentionally separates concerns via interfaces.  New transport modes (e.g. shared memory or IPC), new sink types, and new source adapters can be added without modifying the core runner.  The ordered list of transformers allows pipelines to express complex transformations by composing small, reusable plugins.  Each stage can specify its own timeout and retry/backoff policy, enabling careful tuning of performance and reliability.
 
-Multiple pipelines can be hosted by a single engine, each with its own set of transformers.  Currently, each pipeline opens its own gRPC connection to each plugin.  In the future, connections could be pooled so that multiple pipelines share a connection and multiplex their requests, reducing resource overhead.
+At present the engine runs a **single pipeline per process**.  Running multiple pipelines concurrently within a single engine instance is planned as a future enhancement.  When that capability is added, connections to shared plugins could be pooled so that multiple pipelines reuse a single gRPC connection rather than opening separate connections for each pipeline.
+
+
+## Capabilities vs Roadmap
+
+| Area                  | Today (Implemented)                                   | Roadmap (Planned)                                        |
+|-----------------------|-------------------------------------------------------|----------------------------------------------------------|
+| Source                | Kafka (Sarama), auto & E2E commit modes               | Additional drivers (kgo, Confluent), more sources        |
+| Transformers          | gRPC unary Transform  timeouts, retries, drop+ack     | Streaming TransformStream, batching, credits/backpressure|
+| Sinks                 | stdout (ack batching)                                 | Kafka producer, HTTP, storage sinks                      |
+| Control plane         | Control service registered (handlers unimplemented)   | Implement handlers  auth, RBAC                           |
+| Health                | Protobuf defined                                      | Wire Health service  liveness/ready probes               |
+| Metrics               | Prometheus /metrics                                   | Per-stage latency, retries, fan-out, sink/backpressure   |
+| Pipelines             | Single pipeline per process                           | Multiple concurrent pipelines, hot reload                |
+| Logging               | slog w/ env config (level/json)                       | OTEL logs/exporters, structured correlation IDs          |
+
+
 
 ## Summary
 
 This document has described the architecture of the Quanta event‑processing engine in detail.  Quanta reads events from Kafka, processes them through an ordered chain of transformer plugins and sends the results to sinks.  A modular design with well‑defined interfaces for sources, transformers and sinks enables easy extension and customization.  The control plane and metrics endpoint provide operational visibility and management.  By decoupling stages via gRPC and Protobuf contracts, Quanta supports polyglot plugin development and can evolve towards high‑performance transports such as streaming and shared memory.
+
