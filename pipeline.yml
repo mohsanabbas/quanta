@@ -1,13 +1,37 @@
+#source:
+#  kind:   kafka
+#  driver: sarama
+#  config: kafka_source.yml
+#sinks:
+#  - stdout
+#debug:
+#  per_frame_delay_ms: 10
+#  print_counter:      true
+#  ack_batch_size:     50
+#  ack_flush_ms:       200
+#
+#
+
 source:
-  kind:   kafka
+  kind: kafka
   driver: sarama
   config: kafka_source.yml
+
+transformers:
+  - name: uppercase
+    type: grpc
+    address: "localhost:50051"
+    max_in_flight: 100
+    timeout_ms: 1000
+    content_type: "application/protobuf"
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+
 sinks:
   - stdout
 debug:
-  per_frame_delay_ms: 10
-  print_counter:      true
-  ack_batch_size:     50
-  ack_flush_ms:       200
-
-
+  per_frame_delay_ms: 0
+  print_counter: true
+  ack_batch_size: 1
+  ack_flush_ms: 0

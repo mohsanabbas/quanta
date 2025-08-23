@@ -1,9 +1,8 @@
 package spec
 
-// optional per-sink config bucket
 type sinkConfigs struct {
-	Kafka  any `yaml:"kafka"`  // let driver cast
-	Stdout any `yaml:"stdout"` // ditto
+	Kafka  any `yaml:"kafka"`
+	Stdout any `yaml:"stdout"`
 }
 
 type debugSection struct {
@@ -13,12 +12,28 @@ type debugSection struct {
 	AckFlushMS      int  `yaml:"ack_flush_ms"`
 }
 
+type TransformerSpec struct {
+	Name        string `yaml:"name"`
+	Type        string `yaml:"type"`    // "inproc", "grpc", "stdio", etc.
+	Address     string `yaml:"address"` // e.g. "localhost:50051"
+	MaxInFlight int    `yaml:"max_in_flight"`
+	TimeoutMS   int    `yaml:"timeout_ms"`
+	ContentType string `yaml:"content_type"`
+	RetryPolicy struct {
+		Attempts  int `yaml:"attempts"`
+		BackoffMS int `yaml:"backoff_ms"`
+	} `yaml:"retry_policy"`
+}
+
 type File struct {
 	Source struct {
 		Kind   string `yaml:"kind"`
 		Driver string `yaml:"driver"`
 		Config string `yaml:"config"`
 	} `yaml:"source"`
+
+	// Ordered list of transform plugins applied between source and sinks.
+	Transformers []TransformerSpec `yaml:"transformers"`
 
 	Sinks       []string     `yaml:"sinks"`
 	SinkConfigs sinkConfigs  `yaml:"sink_configs"`

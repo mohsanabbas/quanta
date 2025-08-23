@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package quanta.v1;
+
+// Canonical transform plugin contract.  Plugins implement TransformService
+// to accept events, apply transformations and output zero or more events.
+// This file is versioned; extend messages in a backward‑compatible way.
+option go_package = "quanta/api/proto/v1;pb";
+
+import "google/protobuf/timestamp.proto";
+
+// TransformService defines RPCs for synchronous and streaming transforms.
+service TransformService {
+  rpc Transform(TransformRequest) returns (TransformResponse);
+  rpc TransformStream(stream TransformStreamMessage) returns (stream TransformStreamMessage);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Metadata(MetadataRequest) returns (MetadataResponse);
+}
+
+// Request for unary transform.
+message TransformRequest {
+  string pipeline_id = 1;
+  string plugin_id   = 2;
+  bytes  payload     = 3;
+  EventMetadata metadata = 4;
+  bool   batch_mode  = 5;
+}
+
+// Response for unary transform.
+message TransformResponse {
+  repeated Event events = 1;
+  Status status         = 2;
+  string error_message  = 3;
+  int32  retry_after_ms = 4;
+}
+
+// An output event.
+message Event {
+  string id        = 1;
+  bytes  value     = 2;
+  EventMetadata metadata = 3;
+}
+
+// Metadata about an event.
+message EventMetadata {
+  int64 timestamp_ms = 1;
+  map<string, string> headers = 2;
+  string source_partition = 3;
+  string source_offset    = 4;
+  map<string, string> attributes = 5;
+}
+
+// Streaming message wrapper.
+message TransformStreamMessage {
+  oneof msg {
+    TransformRequest  request  = 1;
+    TransformResponse response = 2;
+    ControlMessage    control  = 3;
+  }
+}
+
+// Control messages for streaming.
+message ControlMessage {
+  enum Type {
+    START  = 0;
+    STOP   = 1;
+    PING   = 2;
+    PONG   = 3;
+    FLUSH  = 4;
+    GRANT  = 5;
+    PAUSE  = 6;
+    RESUME = 7;
+  }
+  Type type   = 1;
+  int32 credits = 2; // only used for GRANT
+}
+
+// Status codes.
+enum Status {
+  OK    = 0;
+  DROP  = 1;
+  RETRY = 2;
+  ERROR = 3;
+}
+
+// Health RPC
+message HealthRequest  {}
+message HealthResponse { bool ok = 1; string details = 2; }
+
+// Metadata RPC
+message MetadataRequest  {}
+message MetadataResponse {
+  string name     = 1;
+  string version  = 2;
+  PluginVersion protocol_version = 3;
+  map<string,string> capabilities = 4;
+}
+
+// Protocol semantic version.
+message PluginVersion {
+  int32 major = 1;
+  int32 minor = 2;
+  int32 patch = 3;
+}
