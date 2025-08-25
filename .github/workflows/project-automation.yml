@@ -49,16 +49,9 @@ jobs:
                     fields(first: 50) {
                       nodes {
                         __typename
-                        ... on ProjectV2FieldCommon {
-                          id
-                          name
-                          dataType
-                        }
+                        ... on ProjectV2FieldCommon { id name dataType }
                         ... on ProjectV2SingleSelectField {
-                          id
-                          name
-                          dataType
-                          options { id name }
+                          id name dataType options { id name }
                         }
                       }
                     }
@@ -74,16 +67,9 @@ jobs:
                     fields(first: 50) {
                       nodes {
                         __typename
-                        ... on ProjectV2FieldCommon {
-                          id
-                          name
-                          dataType
-                        }
+                        ... on ProjectV2FieldCommon { id name dataType }
                         ... on ProjectV2SingleSelectField {
-                          id
-                          name
-                          dataType
-                          options { id name }
+                          id name dataType options { id name }
                         }
                       }
                     }
@@ -115,10 +101,10 @@ jobs:
             }
 
             // Find specific fields by name
-            const byName       = (n) => fields.find(f => f.name === n);
-            const statusField  = byName("Status");
+            const byName        = (n) => fields.find(f => f.name === n);
+            const statusField   = byName("Status");
             const priorityField = byName("Priority");
-            const epicField    = byName("Epic");
+            const epicField     = byName("Epic");
 
             // Add item to project or find existing item
             let itemId = null;
@@ -177,7 +163,7 @@ jobs:
                     itemId:   $item,
                     fieldId:  $field,
                     value:    { singleSelectOptionId: $opt }
-                  }) { clientMutationId }
+                  }) { projectV2Item { id } }
                 }
               `;
               await github.graphql(mut, { project: projectId, item: itemId, field: field.id, opt: opt.id });
@@ -193,7 +179,7 @@ jobs:
                     itemId:   $item,
                     fieldId:  $field,
                     value:    { text: $text }
-                  }) { clientMutationId }
+                  }) { projectV2Item { id } }
                 }
               `;
               await github.graphql(mut, { project: projectId, item: itemId, field: field.id, text });
