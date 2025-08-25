@@ -29,7 +29,7 @@ jobs:
             const isPR    = !!context.payload.pull_request;
             if (!isIssue && !isPR) return;
 
-            const owner        = process.env.OWNER_LOGIN;
+            const owner         = process.env.OWNER_LOGIN;
             const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
             if (!owner || !projectNumber) {
               core.setFailed("OWNER_LOGIN or PROJECT_NUMBER not set");
@@ -40,7 +40,7 @@ jobs:
               ? context.payload.issue.node_id
               : context.payload.pull_request.node_id;
 
-            // GraphQL queries: project fields. Use inline fragments for union types.
+            // GraphQL queries: use inline fragments for union types to fetch fields.
             const projQueryOrg = `
               query($login: String!, $number: Int!) {
                 organization(login: $login) {
@@ -92,17 +92,16 @@ jobs:
               }
             `;
 
+            // Resolve project and fields (try org, then user)
             let projectId = null;
-            let fields = [];
+            let fields    = [];
             try {
               const r = await github.graphql(projQueryOrg, { login: owner, number: projectNumber });
               if (r?.organization?.projectV2) {
                 projectId = r.organization.projectV2.id;
-                fields = r.organization.projectV2.fields.nodes;
+                fields    = r.organization.projectV2.fields.nodes;
               }
-            } catch (e) {
-              // ignore error from org query; fallback to user
-            }
+            } catch {}
             if (!projectId) {
               const r2 = await github.graphql(projQueryUser, { login: owner, number: projectNumber });
               if (r2?.user?.projectV2) {
@@ -115,17 +114,17 @@ jobs:
               return;
             }
 
-            // Helper to find field by name
-            const byName = (n) => fields.find(f => f.name === n);
+            // Find specific fields by name
+            const byName       = (n) => fields.find(f => f.name === n);
             const statusField  = byName("Status");
             const priorityField = byName("Priority");
             const epicField    = byName("Epic");
 
-            // Add item to project or find existing item ID
+            // Add item to project or find existing item
             let itemId = null;
             const addMutation = `
               mutation($project: ID!, $content: ID!) {
-                addProjectV2ItemById(input: {projectId: $project, contentId: $content}) {
+                addProjectV2ItemById(input: { projectId: $project, contentId: $content }) {
                   item { id }
                 }
               }
@@ -134,7 +133,7 @@ jobs:
               const addRes = await github.graphql(addMutation, { project: projectId, content: nodeId });
               itemId = addRes.addProjectV2ItemById.item.id;
             } catch (e) {
-              // If item already exists, find it by content id
+              // If item already exists, find it
               const itemsQuery = `
                 query($project: ID!, $after: String) {
                   node(id: $project) {
@@ -165,24 +164,26 @@ jobs:
               }
             }
 
-            // Helper to set single-select field value
+            // Helper to set single-select field value.
             async function setSingleSelect(field, optionName) {
               if (!field || !optionName) return;
               const opt = field.options?.find(o => o.name === optionName);
               if (!opt) return;
+              // Use String for singleSelectOptionId (the GraphQL API expects String)
               const mut = `
-                mutation($project: ID!, $item: ID!, $field: ID!, $opt: ID!) {
+                mutation($project: ID!, $item: ID!, $field: ID!, $opt: String!) {
                   updateProjectV2ItemFieldValue(input: {
                     projectId: $project,
                     itemId:   $item,
                     fieldId:  $field,
                     value:    { singleSelectOptionId: $opt }
-                  }) { item { id } }
+                  }) { clientMutationId }
                 }
               `;
               await github.graphql(mut, { project: projectId, item: itemId, field: field.id, opt: opt.id });
             }
-            // Helper to set text field value
+
+            // Helper to set text field value.
             async function setText(field, text) {
               if (!field || !text) return;
               const mut = `
@@ -192,13 +193,13 @@ jobs:
                     itemId:   $item,
                     fieldId:  $field,
                     value:    { text: $text }
-                  }) { item { id } }
+                  }) { clientMutationId }
                 }
               `;
               await github.graphql(mut, { project: projectId, item: itemId, field: field.id, text });
             }
 
-            // Default Status = Todo (fallback to "To do" if option missing)
+            // Set default Status to Todo (or "To do")
             if (statusField) {
               await setSingleSelect(statusField, "Todo");
               if (statusField.options && !statusField.options.find(o => o.name === "Todo")) {
@@ -206,14 +207,14 @@ jobs:
               }
             }
 
-            // Set Priority based on label (P0..P3)
+            // Set Priority based on labels P0..P3
             const labelsList = (isIssue ? context.payload.issue.labels : context.payload.pull_request.labels) || [];
             const prio = labelsList.map(l => l.name).find(n => ["P0","P1","P2","P3"].includes(n));
             if (prio) {
               await setSingleSelect(priorityField, prio);
             }
 
-            // Set Epic field from issue body (look for "Epic: #ID")
+            // Set Epic field from issue body: "Epic: #<id>"
             if (isIssue && context.payload.issue.body) {
               const m = context.payload.issue.body.match(/Epic:\s*(#[0-9]+)/i);
               if (m) {
