@@ -22,6 +22,7 @@ jobs:
       - name: Add item to project & set fields
         uses: actions/github-script@v7
         with:
+          # Personal access token secret with `project` + `repo` scopes
           github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const isIssue = !!context.payload.issue;
@@ -39,7 +40,7 @@ jobs:
               ? context.payload.issue.node_id
               : context.payload.pull_request.node_id;
 
-            // Try org first, then user (handles both kinds of projects)
+            // GraphQL queries: project fields. Use __typename and fragments to avoid union errors
             const projQueryOrg = `
               query($login: String!, $number: Int!) {
                 organization(login: $login) {
@@ -47,10 +48,12 @@ jobs:
                     id
                     fields(first: 50) {
                       nodes {
+                        __typename
                         id
                         name
-                        dataType
-                        ... on ProjectV2SingleSelectField { options { id name } }
+                        ... on ProjectV2SingleSelectField {
+                          options { id name }
+                        }
                       }
                     }
                   }
@@ -64,10 +67,12 @@ jobs:
                     id
                     fields(first: 50) {
                       nodes {
+                        __typename
                         id
                         name
-                        dataType
-                        ... on ProjectV2SingleSelectField { options { id name } }
+                        ... on ProjectV2SingleSelectField {
+                          options { id name }
+                        }
                       }
                     }
                   }
@@ -83,7 +88,7 @@ jobs:
                 projectId = r.organization.projectV2.id;
                 fields = r.organization.projectV2.fields.nodes;
               }
-            } catch {}
+            } catch (e) {}
             if (!projectId) {
               const r2 = await github.graphql(projQueryUser, { login: owner, number: projectNumber });
               if (r2?.user?.projectV2) {
@@ -101,7 +106,7 @@ jobs:
             const priorityField = byName("Priority");
             const epicField = byName("Epic");
 
-            // Add item (or find if already present)
+            // Add item or find existing
             let itemId = null;
             const addMutation = `
               mutation($project: ID!, $content: ID!) {
@@ -114,6 +119,7 @@ jobs:
               const addRes = await github.graphql(addMutation, { project: projectId, content: nodeId });
               itemId = addRes.addProjectV2ItemById.item.id;
             } catch (e) {
+              // find existing
               const itemsQuery = `
                 query($project: ID!, $after: String) {
                   node(id: $project) {
@@ -144,9 +150,10 @@ jobs:
               }
             }
 
+            // helpers for updating fields
             async function setSingleSelect(field, optionName) {
               if (!field || !optionName) return;
-              const opt = field.options.find(o => o.name === optionName);
+              const opt = field.options?.find(o => o.name === optionName);
               if (!opt) return;
               const mut = `
                 mutation($project: ID!, $item: ID!, $field: ID!, $opt: ID!) {
@@ -175,12 +182,17 @@ jobs:
               await github.graphql(mut, { project: projectId, item: itemId, field: field.id, text });
             }
 
-            // Default Status = Todo
-            await setSingleSelect(statusField, "Todo");
+            // Default Status = Todo (fallback to "To do"). Some templates use "To do".
+            if (statusField) {
+              await setSingleSelect(statusField, "Todo");
+              if (statusField.options && !statusField.options.find(o => o.name === "Todo")) {
+                await setSingleSelect(statusField, "To do");
+              }
+            }
 
             // Priority from labels (P0..P3)
-            const labels = (isIssue ? context.payload.issue.labels : context.payload.pull_request.labels) || [];
-            const prio = labels.map(l => l.name).find(n => ["P0","P1","P2","P3"].includes(n));
+            const labelsList = (isIssue ? context.payload.issue.labels : context.payload.pull_request.labels) || [];
+            const prio = labelsList.map(l => l.name).find(n => ["P0","P1","P2","P3"].includes(n));
             if (prio) await setSingleSelect(priorityField, prio);
 
             // Epic from body: "Epic: #123"
