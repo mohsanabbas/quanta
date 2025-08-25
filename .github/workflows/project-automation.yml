@@ -22,7 +22,7 @@ jobs:
       - name: Add item to project & set fields
         uses: actions/github-script@v7
         with:
-          # Personal access token secret with `project` + `repo` scopes
+          # Personal access token secret with `repo` + `project` scopes
           github-token: ${{ secrets.QUANTA_PROJECT_TOKEN }}
           script: |
             const isIssue = !!context.payload.issue;
@@ -40,7 +40,7 @@ jobs:
               ? context.payload.issue.node_id
               : context.payload.pull_request.node_id;
 
-            // GraphQL queries: use inline fragments for union types to fetch fields.
+            // --- Queries: use fragments so we don't select directly on a union
             const projQueryOrg = `
               query($login: String!, $number: Int!) {
                 organization(login: $login) {
@@ -157,7 +157,7 @@ jobs:
               if (!opt) return;
               // Use String for singleSelectOptionId (the GraphQL API expects String)
               const mut = `
-                mutation($project: ID!, $item: ID!, $field: ID!, $opt: String!) {
+                mutation($project: ID!, $item: ID!, $field: ID!, $opt: ID!) {
                   updateProjectV2ItemFieldValue(input: {
                     projectId: $project,
                     itemId:   $item,
@@ -196,12 +196,12 @@ jobs:
             // Set Priority based on labels P0..P3
             const labelsList = (isIssue ? context.payload.issue.labels : context.payload.pull_request.labels) || [];
             const prio = labelsList.map(l => l.name).find(n => ["P0","P1","P2","P3"].includes(n));
-            if (prio) {
+            if (prio && priorityField) {
               await setSingleSelect(priorityField, prio);
             }
 
-            // Set Epic field from issue body: "Epic: #<id>"
-            if (isIssue && context.payload.issue.body) {
+            // --- Epic from body: "Epic: #123"
+            if (isIssue && epicField && context.payload.issue.body) {
               const m = context.payload.issue.body.match(/Epic:\s*(#[0-9]+)/i);
               if (m) {
                 await setText(epicField, m[1]);
