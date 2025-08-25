@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose a new feature or capability
+labels: ["type/feature"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why is this needed? Who benefits?
+      placeholder: |
+        Problem statement, motivation, examples of impact.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change? High-level outline, alternatives considered
+      placeholder: |
+        1) ...
+        2) ...
+  - type: input
+    id: epic
+    attributes:
+      label: Epic
+      description: Link to epic issue (if any)
+      placeholder: "EPIC: #123"
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: ["P0","P1","P2","P3"]
+      default: 1
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - area/control-plane
+        - area/runner
+        - area/transform
+        - area/source
+        - area/sink
+        - area/telemetry
+        - area/docs
+  - type: checkboxes
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      options:
+        - label: Clear user-visible outcome is defined
+        - label: Telemetry/metrics updated
+        - label: Tests planned (unit/e2e)
+        - label: Docs plan captured

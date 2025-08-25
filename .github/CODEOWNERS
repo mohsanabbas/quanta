@@ -1,0 +1,6 @@
+# Require review from owners by path
+/api/proto/            @mohsanabbas
+/internal/engine/      @mohsanabbas
+/internal/pipeline/    @mohsanabbas
+/internal/transform/   @mohsanabbas
+/internal/telemetry/   @mohsanabbas

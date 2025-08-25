@@ -1,0 +1,19 @@
+name: Chore / Task
+description: Maintenance, refactor, docs, infra
+labels: ["type/chore"]
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Task description
+      placeholder: What needs doing, why now?
+      value: |
+        ## Task
+        -
+        ## Rationale
+        -
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: ["area/control-plane","area/runner","area/transform","area/source","area/sink","area/telemetry","area/docs"]

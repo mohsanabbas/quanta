@@ -1,0 +1,30 @@
+name: Bug report
+description: File a bug
+labels: ["type/bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      placeholder: What happened vs what you expected?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: 1) … 2) … 3) …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs/metrics
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit SHA
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Severity
+      options: ["P0","P1","P2","P3"]
