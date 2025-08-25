@@ -43,7 +43,7 @@ jobs:
               ? context.payload.issue.node_id
               : context.payload.pull_request.node_id;
 
-            // --- Queries: use fragments for union-safe selection
+            // --- Union-safe field lookup (both org and user; your case is user)
             const projQueryOrg = `
               query($login: String!, $number: Int!) {
                 organization(login: $login) {
@@ -77,7 +77,6 @@ jobs:
               }
             `;
 
-            // --- Resolve project (try org first, then user)
             let projectId = null;
             let fields    = [];
             try {
@@ -87,7 +86,7 @@ jobs:
                 fields    = r.organization.projectV2.fields.nodes;
               }
             } catch (e) {
-              core.info("Org project lookup failed (ok for user projects): " + e.message);
+              core.info("Org project lookup failed (ok for user projects): " + (e?.message || e));
             }
             if (!projectId) {
               const r2 = await github.graphql(projQueryUser, { login: owner, number: projectNumber });
@@ -106,7 +105,7 @@ jobs:
             const priorityField = byName("Priority");
             const epicField     = byName("Epic");
 
-            // --- Add content to project (or find existing)
+            // --- Add content to project or recover existing item
             let itemId = null;
             const addMutation = `
               mutation($project: ID!, $content: ID!) {
@@ -119,7 +118,7 @@ jobs:
               const addRes = await github.graphql(addMutation, { project: projectId, content: nodeId });
               itemId = addRes.addProjectV2ItemById.item.id;
             } catch (e) {
-              // If already exists, search for it
+              // If already added, locate it
               const itemsQuery = `
                 query($project: ID!, $after: String) {
                   node(id: $project) {
@@ -145,21 +144,19 @@ jobs:
                 cursor = res.node.items.pageInfo.endCursor;
               }
               if (!itemId) {
-                core.setFailed("Failed to add or locate project item: " + e.message);
+                core.setFailed("Failed to add or locate project item: " + (e?.message || e));
                 return;
               }
             }
 
-            // --- Helpers with schema-compat handling
-
-            // Try ID first; if the API wants String, fallback automatically.
+            // --- Helpers (handles ID! vs String! schema differences)
             async function updateSingleSelectValue(fieldId, optionId) {
               const mutID = `
                 mutation($project: ID!, $item: ID!, $field: ID!, $opt: ID!) {
                   updateProjectV2ItemFieldValue(input: {
                     projectId: $project, itemId: $item, fieldId: $field,
                     value: { singleSelectOptionId: $opt }
-                  }) { projectV2Item { id } }
+                  }) { projectV2Item { id } clientMutationId }
                 }
               `;
               const mutStr = `
@@ -167,7 +164,7 @@ jobs:
                   updateProjectV2ItemFieldValue(input: {
                     projectId: $project, itemId: $item, fieldId: $field,
                     value: { singleSelectOptionId: $opt }
-                  }) { projectV2Item { id } }
+                  }) { projectV2Item { id } clientMutationId }
                 }
               `;
               try {
@@ -203,13 +200,13 @@ jobs:
                   updateProjectV2ItemFieldValue(input: {
                     projectId: $project, itemId: $item, fieldId: $field,
                     value: { text: $text }
-                  }) { projectV2Item { id } }
+                  }) { projectV2Item { id } clientMutationId }
                 }
               `;
               await github.graphql(mut, { project: projectId, item: itemId, field: field.id, text });
             }
 
-            // --- Default Status = Todo (fall back to "To do")
+            // --- Defaults/Derivations
             if (statusField) {
               await setSingleSelect(statusField, "Todo");
               if (statusField.options && !statusField.options.find(o => o.name === "Todo")) {
@@ -217,14 +214,12 @@ jobs:
               }
             }
 
-            // --- Priority from labels (P0..P3)
             const labelsList = (isIssue ? context.payload.issue.labels : context.payload.pull_request.labels) || [];
             const prio = labelsList.map(l => l.name).find(n => ["P0","P1","P2","P3"].includes(n));
             if (prio && priorityField) {
               await setSingleSelect(priorityField, prio);
             }
 
-            // --- Epic from body: "Epic: #123"
             if (isIssue && epicField && context.payload.issue.body) {
               const m = context.payload.issue.body.match(/Epic:\s*(#[0-9]+)/i);
               if (m) await setText(epicField, m[1]);
