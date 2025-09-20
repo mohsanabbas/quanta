@@ -1,7 +1,7 @@
 # Contributing to Quanta
 
 ## Development
-- Go 1.22+
+- Go 1.25+
 - `make test` runs unit tests and linters.
 
 ## Pull requests
