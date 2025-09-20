@@ -1,87 +1,87 @@
 # Quanta
 
-Early-stage streaming/event-processing engine in Go. Reads from Kafka, invokes transformer plugins, and emits to sinks. Exposes gRPC control and a metrics endpoint.
+Quanta is a Go streaming engine that takes events from Kafka, runs them through a chain of processors, and delivers the results to sinks (Kafka, stdout, and more to come). The runtime keeps context and backpressure information from the source all the way to the sink so we can offer end-to-end commit semantics.
 
-Status: source→transformers→sinks path is working with E2E acks  example gRPC transformer included.
+**Specifications & Architecture**: the full design notes live in the [Spec Book](docs/specs/SUMMARY.md).
 
-## Features
-- Kafka source (Sarama) with backpressure and E2E commit support.
-- Pluggable transformers over gRPC  retry/backoff and drop+ack on exhaustion.
-- Stdout sink with configurable ack batching.
-- Versioned YAML configs (schema_version: v1).
-- Docker images from host-built Linux binaries (arm64/amd64).
+## What you get today
 
-## Configs (v1)
-- See CONFIGS.md for the full schema and examples.
-- pipeline.yml points to kafka_source.yml  relative paths are resolved relative to the pipeline file.
+- **Kafka `Source` --> Transformer --> Sink** pipeline with at-least-once delivery and optional end-to-end commits.
+- **gRPC transformers** with unary RPC today and a clear path to streaming RPCs tomorrow.
+- **Adapter registry** for sources and sinks—drop in your own driver via `init` registration.
+- **Context-aware pipeline** so shutdowns and timeouts behave predictably.
 
-## Quick start (host)
-1) Start the example transformer:
+## Try it out locally
+
+### 1. Run the demo transformer
+
 ```bash
 go run ./examples/transformers/uppercase --listen=:50052
 ```
-2) Start the engine (uses pipeline.yml by default):
+
+### 2. Run the engine
+
 ```bash
 go run ./cmd/engine
 ```
-3) Validate:
-- Transformer logs should print: `uppercase plugin listening on :50052` and `received event ...` lines.
-- Engine prints sink offsets  Kafka UI shows periodic lag commits (E2E mode).
 
-Tip: Override pipeline path with `QUANTA_PIPELINE_YML=/abs/path/pipeline.yml`.
+By default the engine loads `pipeline.yml`, reads from Kafka, calls the transformer above, and prints results to stdout. Override the pipeline with `QUANTA_PIPELINE_YML=/path/to/pipeline.yml`.
 
-## Quick start (Docker)
-Prereqs
-- Docker Desktop (Compose v2).
-- Kafka broker reachable at:
-  - macOS/Windows: `host.docker.internal:9094` (default in kafka_source.docker.yml)
-  - Linux: set `brokers: ["<host-ip>:9094"]` or run Kafka in Compose and update brokers accordingly.
+### 3. Check it’s working
 
-Build and run (arm64 default  use `ARCH=amd64` on Intel/AMD hosts):
+- The transformer should log `card-registration-normalizer listening on :50052` (or similar).
+- The engine logs frame counters and ack commits; if you have Kafka UI, you should see offsets advance.
+
+## Docker workflow
+
+Requirements: Docker Desktop / Compose v2 and a reachable Kafka broker (`host.docker.internal:9094` on macOS/Windows).
+
 ```bash
-make docker-up ARCH=arm64     # or ARCH=amd64
-make docker-logs              # follow logs
-make docker-smoke             # quick metrics probe
-```
-Validate
-- Uppercase logs: `uppercase plugin listening on :50052`.
-- Metrics endpoint served:
-```bash
+# build linux binaries for your arch
+make build-linux ARCH=arm64   # or amd64
+
+# launch the stack (engine + transformer)
+make docker-up ARCH=arm64
+
+# tail logs / check metrics
+make docker-logs
 curl -sf http://localhost:9100/metrics | head
-```
 
-Stop
-```bash
+# tear down when done
 make docker-down
 ```
 
-## Makefile targets
-- `make build` — build all packages.
-- `make proto` — regenerate protobuf stubs.
-- `make build-linux ARCH=arm64|amd64` — cross-compile static Linux binaries into `bin/linux-<arch>/`.
-- `make docker-build ARCH=...` — build `quanta-engine:local` and `quanta-uppercase:local` using host-built binaries.
-- `make docker-up ARCH=...` — rebuild images and start Compose stack.
-- `make docker-logs`, `make docker-down`, `make docker-smoke` — utility targets.
+## Developer toolbox
 
-## Validation results
-- Local build: PASS.
-- Docker (first attempt): FAIL due to arch mismatch (`taggedPointerPack` runtime error) when copying amd64 binaries into an arm64 runtime.
-- Fix: parameterized Dockerfiles with `BIN_DIR`, Makefile with `ARCH`, and Compose build args  rebuilt arm64 binaries/images.
-- Docker (arm64): PASS — both containers start  transformer logs `listening`  `curl http://localhost:9100/metrics` returns metrics.
+| Command | Description |
+|---------|-------------|
+| `make build` | Go build all modules. |
+| `make proto` | Regenerate protobuf stubs. |
+| `make build-linux ARCH=...` | Cross-compile static binaries for Docker. |
+| `make docker-build ARCH=...` | Build engine and transformer images. |
+| `make docker-up ARCH=...` | Rebuild images and start the Compose stack. |
+| `make docker-logs` | Follow container logs. |
+| `make docker-smoke` | Quick health probe of the metrics endpoint. |
 
-## Troubleshooting
-- Arch mismatch errors (e.g., `taggedPointerPack`): build with the correct `ARCH` and ensure Compose builds with `BIN_DIR=bin/linux-<arch>`.
-- Kafka connectivity: make sure the broker is reachable from containers (use `host.docker.internal` on macOS/Windows or host IP on Linux).
-- E2E mode appears stalled: transformer errors/timeouts are retried  after retries, engine drops+acks to avoid deadlocks. Check transformer logs  consider increasing `backpressure.capacity`.
-- Port conflicts: change transformer listen port or engine metrics port mappings in Compose.
+## Troubleshooting quick hits
 
-## Layout
-- cmd/engine — engine binary (reads `QUANTA_PIPELINE_YML` or `pipeline.yml`).
-- internal/pipeline — compiler and runner  wires source→transformers→sinks.
-- source/kafka — Sarama driver, backpressure, checkpoint manager, config.
-- internal/transform — plugin client (gRPC/in-process shim).
-- examples/transformers/uppercase — example gRPC transformer.
-- sink/stdout — stdout sink with ack batching.
+- **Architecture mismatch**: build binaries for the same arch as the container (`make build-linux ARCH=arm64`).
+- **Kafka not reachable**: check broker address inside containers; macOS/Windows usually need `host.docker.internal`.
+- **Processing stalls**: look at transformer logs for retries. Increase `backpressure.capacity` if you expect larger bursts.
+- **Port conflicts**: adjust `--listen` for transformers or the metrics port in `pipeline.yml`.
+
+## Project layout
+
+```
+cmd/engine                Engine entrypoint
+internal/pipeline         Compiler + runner wiring sources --> transformers --> sinks
+source/kafka              Sarama-based source driver, backpressure & checkpoints
+sink/kafka                Kafka sink adapter
+sink/stdout               Debug sink with optional batching
+examples/transformers     Sample transformer implementations
+docs/specs                Specification book (architecture, configs, semantics)
+```
 
 ## License
-Apache-2.0 (planned).
+
+Apache-2.0 
