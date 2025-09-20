@@ -85,6 +85,12 @@ docker-up: docker-down docker-build
 	@echo "• Starting stack"
 	@ARCH=$(ARCH) docker compose up -d --build --force-recreate
 
+docker-run:
+	@echo "• Building Linux $(ARCH) binaries"
+	@$(MAKE) build-linux ARCH=$(ARCH)
+	@echo "• Starting stack (ARCH=$(ARCH))"
+	@ARCH=$(ARCH) docker compose up --build --force-recreate
+
 docker-down:
 	@docker compose down
 

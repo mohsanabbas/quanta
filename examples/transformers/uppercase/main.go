@@ -4,94 +4,201 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"log"
 	"net"
-	pb "quanta/api/proto/v1"
-	"quanta/internal/logging"
+	"os"
 	"strings"
+	"time"
+
+	pb "quanta/api/proto/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type UppercasePlugin struct {
+type rawEvent struct {
+	Properties struct {
+		CorrelationID      string `json:"correlation_id"`
+		CardHash           string `json:"card_hash"`
+		CardBIN            string `json:"card_bin"`
+		CardLastFour       string `json:"card_last_four"`
+		CardExpirationDate string `json:"card_expiration_date"`
+		Status             string `json:"status"`
+		DeviceAppVersion   string `json:"device_app_version"`
+		Origin             string `json:"origin"`
+		DeviceID           string `json:"device_id"`
+		DeviceOS           string `json:"device_os"`
+		DeviceModel        string `json:"device_model"`
+		DeviceSessionID    string `json:"device_session_id"`
+		IsThirdParty       bool   `json:"is_third_party"`
+	} `json:"properties"`
+	Context struct {
+		EventContractID string `json:"event_contract_id"`
+		Event           string `json:"event"`
+		AppName         string `json:"app_name"`
+		AppVersion      string `json:"app_version"`
+		AppType         string `json:"app_type"`
+		CreatedAt       string `json:"created_at"`
+		UserID          string `json:"user_id"`
+		UserType        string `json:"user_type"`
+	} `json:"context"`
+	Custom any `json:"custom"`
+}
+
+type normalizedEvent struct {
+	EventID       string    `json:"event_id"`
+	EventName     string    `json:"event_name"`
+	EventStatus   string    `json:"event_status"`
+	StatusClass   string    `json:"status_class"`
+	Origin        string    `json:"origin"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	CorrelationID string    `json:"correlation_id"`
+	Device        device    `json:"device"`
+	User          user      `json:"user"`
+	Card          card      `json:"card"`
+}
+
+type device struct {
+	ID         string `json:"id"`
+	Model      string `json:"model"`
+	OS         string `json:"os"`
+	AppVersion string `json:"app_version"`
+	SessionID  string `json:"session_id"`
+}
+
+type user struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+type card struct {
+	BIN        string `json:"bin"`
+	LastFour   string `json:"last_four"`
+	Expiration string `json:"expiration"`
+	Hash       string `json:"hash"`
+}
+
+type transformerServer struct {
 	pb.UnimplementedTransformServiceServer
 }
 
-func (p *UppercasePlugin) Metadata(ctx context.Context, _ *pb.MetadataRequest) (*pb.MetadataResponse, error) {
+func (s *transformerServer) Metadata(context.Context, *pb.MetadataRequest) (*pb.MetadataResponse, error) {
 	return &pb.MetadataResponse{
-		Name:            "uppercase",
-		Version:         "0.1.0",
+		Name:            "card-registration-normalizer",
+		Version:         "1.1.0",
 		ProtocolVersion: &pb.PluginVersion{Major: 1, Minor: 0, Patch: 0},
 		Capabilities:    map[string]string{"batch": "false"},
 	}, nil
 }
 
-func (p *UppercasePlugin) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
-	return &pb.HealthResponse{Ok: true, Details: "OK"}, nil
+func (s *transformerServer) Health(context.Context, *pb.HealthRequest) (*pb.HealthResponse, error) {
+	return &pb.HealthResponse{Ok: true, Details: "ready"}, nil
 }
 
-func (p *UppercasePlugin) TransformStream(pb.TransformService_TransformStreamServer) error {
+func (s *transformerServer) TransformStream(pb.TransformService_TransformStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "streaming not implemented")
 }
 
-func main() {
-	listenAddr := flag.String("listen", ":50052", "address to listen on")
-	flag.Parse()
+func (s *transformerServer) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
+	var in rawEvent
+	if err := json.Unmarshal(req.GetPayload(), &in); err != nil {
+		return &pb.TransformResponse{Status: pb.Status_DROP, ErrorMessage: err.Error()}, nil
+	}
 
-	lis, err := net.Listen("tcp", *listenAddr)
+	key := in.Context.EventContractID
+	if key == "" {
+		key = in.Properties.CorrelationID
+	}
+
+	occurredAt, err := time.Parse(time.RFC3339, in.Context.CreatedAt)
 	if err != nil {
-		logging.L().Error("uppercase: failed to listen", "err", err)
-		return
+		occurredAt = time.Now().UTC()
 	}
-	s := grpc.NewServer()
-	pb.RegisterTransformServiceServer(s, &UppercasePlugin{})
-	logging.L().Info("uppercase plugin listening", "addr", *listenAddr)
-	if err := s.Serve(lis); err != nil {
-		logging.L().Error("uppercase: failed to serve", "err", err)
+
+	statusUpper := strings.ToUpper(in.Properties.Status)
+	eventName := strings.ToLower(in.Context.Event)
+	statusClass := classifyStatus(statusUpper)
+
+	norm := normalizedEvent{
+		EventID:       key,
+		EventName:     eventName,
+		EventStatus:   statusUpper,
+		StatusClass:   statusClass,
+		Origin:        in.Properties.Origin,
+		OccurredAt:    occurredAt,
+		CorrelationID: in.Properties.CorrelationID,
+		Device: device{
+			ID:         in.Properties.DeviceID,
+			Model:      in.Properties.DeviceModel,
+			OS:         strings.ToUpper(in.Properties.DeviceOS),
+			AppVersion: in.Properties.DeviceAppVersion,
+			SessionID:  in.Properties.DeviceSessionID,
+		},
+		User: user{
+			ID:   in.Context.UserID,
+			Type: in.Context.UserType,
+		},
+		Card: card{
+			BIN:        in.Properties.CardBIN,
+			LastFour:   in.Properties.CardLastFour,
+			Expiration: in.Properties.CardExpirationDate,
+			Hash:       in.Properties.CardHash,
+		},
+	}
+
+	payload, err := json.Marshal(norm)
+	if err != nil {
+		return &pb.TransformResponse{Status: pb.Status_DROP, ErrorMessage: err.Error()}, nil
+	}
+
+	headers := map[string]string{
+		"event-name":   norm.EventName,
+		"status":       norm.EventStatus,
+		"status-class": norm.StatusClass,
+	}
+
+	meta := &pb.EventMetadata{
+		TimestampMs: time.Now().UnixMilli(),
+		Headers:     headers,
+		Attributes: map[string]string{
+			"sink.key": norm.EventID,
+		},
+	}
+
+	ev := &pb.Event{Value: payload, Metadata: meta}
+	return &pb.TransformResponse{Status: pb.Status_OK, Events: []*pb.Event{ev}}, nil
+}
+
+func classifyStatus(status string) string {
+	switch {
+	case strings.Contains(status, "APPROV"), strings.Contains(status, "UNRESTRICT"):
+		return "approved"
+	case strings.Contains(status, "REJECT"):
+		return "rejected"
+	case strings.Contains(status, "PEND"):
+		return "pending"
+	default:
+		return "unknown"
 	}
 }
 
-type eventWrapper struct {
-	Context struct {
-		Event string `json:"event"`
-	} `json:"context"`
-}
-
-func (p *UppercasePlugin) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
-
-	var wrapper eventWrapper
-	if err := json.Unmarshal(req.Payload, &wrapper); err == nil && wrapper.Context.Event != "" {
-		logging.L().Info("uppercase received event", "event", wrapper.Context.Event)
+func main() {
+	listen := flag.String("listen", os.Getenv("TRANSFORMER_LISTEN"), "listen address")
+	flag.Parse()
+	addr := *listen
+	if addr == "" {
+		addr = ":50052"
 	}
 
-	out := req.Payload
-
-	var obj map[string]any
-	if err := json.Unmarshal(req.Payload, &obj); err == nil {
-		obj["_transformed"] = "uppercase"
-		if b, err := json.Marshal(obj); err == nil {
-			out = b
-		}
-	} else {
-		out = []byte(strings.ToUpper(string(req.Payload)))
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen: %v", err)
 	}
-
-	ev := &pb.Event{
-		Id:       req.Metadata.SourceOffset,
-		Value:    out,
-		Metadata: req.Metadata,
+	srv := grpc.NewServer()
+	pb.RegisterTransformServiceServer(srv, &transformerServer{})
+	log.Printf("transformer listening on %s", addr)
+	if err := srv.Serve(lis); err != nil {
+		log.Fatalf("serve: %v", err)
 	}
-	if ev.Metadata == nil {
-		ev.Metadata = &pb.EventMetadata{}
-	}
-	if ev.Metadata.Attributes == nil {
-		ev.Metadata.Attributes = map[string]string{}
-	}
-	ev.Metadata.Attributes["transformed_by"] = "uppercase"
-
-	return &pb.TransformResponse{
-		Events: []*pb.Event{ev},
-		Status: pb.Status_OK,
-	}, nil
 }

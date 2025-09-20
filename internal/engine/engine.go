@@ -17,7 +17,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		<-ctx.Done()
 		e.transport.Stop()
 		if e.runner != nil {
-			_ = e.runner.Close()
+			_ = e.runner.Close(ctx)
 		}
 	}()
 

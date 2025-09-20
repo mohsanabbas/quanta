@@ -51,16 +51,16 @@ type captureSink struct {
 	ackFn  sink.EmitFn
 }
 
-func (c *captureSink) Configure(any) error { return nil }
-func (c *captureSink) Push(f *pb.Frame) error {
+func (c *captureSink) Configure(context.Context, any) error { return nil }
+func (c *captureSink) Publish(ctx context.Context, f *pb.Frame) error {
 	c.pushed = append(c.pushed, f)
 	if c.ackFn != nil {
 		c.ackFn(f.Checkpoint)
 	}
 	return nil
 }
-func (c *captureSink) Close() error           { return nil }
-func (c *captureSink) BindAck(fn sink.EmitFn) { c.ackFn = fn }
+func (c *captureSink) Close(context.Context) error { return nil }
+func (c *captureSink) BindAck(fn sink.EmitFn)      { c.ackFn = fn }
 
 func makeFrame() *pb.Frame {
 	return &pb.Frame{Value: []byte("hello"), Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{Kafka: &pb.KafkaOffset{Topic: "t", Partition: 1, Offset: 42}}}}
@@ -75,7 +75,7 @@ func TestRunner_TransformerOK_ForwardsAndSinkAcks(t *testing.T) {
 	r.AddSink(cs)
 
 	f := makeFrame()
-	if err := r.pushFrame(f); err != nil {
+	if err := r.pushFrame(context.Background(), f); err != nil {
 		t.Fatalf("pushFrame: %v", err)
 	}
 	if len(cs.pushed) != 1 {
@@ -95,7 +95,7 @@ func TestRunner_TransformerDrop_AcksNoPush(t *testing.T) {
 	r.AddSink(cs)
 
 	f := makeFrame()
-	if err := r.pushFrame(f); err != nil {
+	if err := r.pushFrame(context.Background(), f); err != nil {
 		t.Fatalf("pushFrame: %v", err)
 	}
 	if len(cs.pushed) != 0 {
@@ -113,7 +113,7 @@ func TestRunner_TransformerRetryThenOK(t *testing.T) {
 	r.AddSink(cs)
 
 	f := makeFrame()
-	if err := r.pushFrame(f); err != nil {
+	if err := r.pushFrame(context.Background(), f); err != nil {
 		t.Fatalf("pushFrame: %v", err)
 	}
 	if len(cs.pushed) != 1 {
@@ -133,7 +133,7 @@ func TestRunner_MultiStageFanout(t *testing.T) {
 	r.AddSink(cs)
 
 	f := makeFrame()
-	if err := r.pushFrame(f); err != nil {
+	if err := r.pushFrame(context.Background(), f); err != nil {
 		t.Fatalf("pushFrame: %v", err)
 	}
 	if len(cs.pushed) != 2 {
