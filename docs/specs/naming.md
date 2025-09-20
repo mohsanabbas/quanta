@@ -1,8 +1,8 @@
 # Naming Conventions
 
-- **Packages** follow the pattern `engine`, `pipeline`, `source/<driver>`, `sink/<driver>`, `transform/<name>`, `processor/<name>`.
-- **Files** use `<component>_adapter.go`, `<component>_config.go`, `<component>_registry.go`, and `<driver_library>.go` where relevant.
-- **Types** export interfaces named `Adapter`, `Registration`, `Config`. Concrete implementations use `<Driver>` suffix.
-- **Configuration keys** exposed to YAML/JSON use `lower_snake_case`. Go struct fields use `UpperCamelCase` with struct tags mapping to snake case.
-- **Docs** live under `docs/specs` and mirror this structure.
+- **Packages**: `engine`, `pipeline`, `source/<driver>`, `sink/<driver>`, `processor/<name>`.
+- **Files**: use suffices `_adapter.go`, `_config.go`, `_registry.go` to denote role. Driver-specific files follow `<driver>_*.go`.
+- **Types**: exported interfaces named `Adapter`, `Registration`, `Config`. Concrete types use `<Driver>` suffix.
+- **Config Keys**: YAML/JSON use `lower_snake_case`. Struct fields use UpperCamelCase with `json` tags mapping to snake case.
+- **Docs**: live under `docs/specs` with one concept per file.
 

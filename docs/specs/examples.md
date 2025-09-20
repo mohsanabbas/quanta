@@ -1,6 +1,6 @@
 # Examples & Quickstarts
 
-## Minimal Pipeline: File → Transformer → Kafka Sink
+## File → Processor → Stdout
 
 ```yaml
 schema_version: v1
@@ -13,14 +13,21 @@ transformers:
     type: grpc
     address: "localhost:50052"
 sinks:
-  - kafka
+  - stdout
 sink_configs:
-  kafka:
-    brokers: ["kafka:29092"]
-    topic: "output"
+  stdout:
+    print_counter: true
+    print_value: true
 ```
 
-## Kafka → Transform → Kafka
+Run the transformer and engine:
+
+```sh
+UPPERCASE_LISTEN_ADDR=:50052 go run ./examples/transformers/uppercase &
+QUANTA_PIPELINE_YML=pipeline.yml go run ./cmd/engine
+```
+
+## Kafka → Transformer → Kafka
 
 ```yaml
 schema_version: v1
@@ -34,21 +41,16 @@ transformers:
     address: "localhost:50052"
 sinks:
   - kafka
-  - stdout
 sink_configs:
   kafka:
     brokers: ["kafka:29092"]
     topic: "normalized.events"
-  stdout:
-    print_counter: true
-    print_value: true
 ```
 
-### Running (local)
+Produce and consume for smoke testing:
 
 ```sh
-make build
+docker compose -f test/kafkaenv/docker-compose.yaml up -d
 UPPERCASE_LISTEN_ADDR=:50052 go run ./examples/transformers/uppercase &
 QUANTA_PIPELINE_YML=pipeline.yml go run ./cmd/engine
 ```
-
