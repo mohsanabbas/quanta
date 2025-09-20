@@ -1,4 +1,3 @@
-// quanta/sink/stdout/driver.go
 package stdout
 
 import (

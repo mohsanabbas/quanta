@@ -19,6 +19,14 @@ transformers:
 
 sinks:
   - stdout
+  - kafka
+
+sink_configs:
+  kafka:
+    brokers:
+      - "localhost:9094"
+    topic: "quanta-output"
+    required_acks: 1
 
 debug:
   per_frame_delay_ms: 0

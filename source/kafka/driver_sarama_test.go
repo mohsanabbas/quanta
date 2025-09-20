@@ -1,8 +1,10 @@
 package kafka
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	pb "quanta/api/proto/v1"
 )
@@ -11,46 +13,57 @@ func makeKafkaToken(topic string, part int32, off int64) *pb.CheckpointToken {
 	return &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{Kafka: &pb.KafkaOffset{Topic: topic, Partition: part, Offset: off}}}
 }
 
-func TestSaramaDriver_OnAck_Enqueue(t *testing.T) {
+func TestSaramaDriver_OnAckDispatchesCallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	d := &SaramaDriver{}
-	d.ackCh = make(chan recordID, 1)
+	d.acks = newAckTracker[recordID](1)
+	d.acks.Start(ctx)
 
-	tok := makeKafkaToken("t", 1, 42)
-	d.OnAck(&pb.ConnectorAck{Checkpoint: tok})
-
-	rec := <-d.ackCh
-	if rec.topic != "t" || rec.partition != 1 || rec.offset != 42 {
-		t.Fatalf("unexpected record enqueued: %+v", rec)
-	}
-}
-
-func TestSaramaDriver_AckCallbackProcessed(t *testing.T) {
-	d := &SaramaDriver{}
-	d.ackCh = make(chan recordID, 1)
-	d.pending = make(map[recordID]func())
-
-	var called int32
+	var called atomic.Int32
 	rec := recordID{"t", 2, 99}
-	d.pending[rec] = func() { atomic.AddInt32(&called, 1) }
+	d.acks.Track(rec, func() {
+		called.Add(1)
+	})
 
 	tok := makeKafkaToken(rec.topic, rec.partition, rec.offset)
 	d.OnAck(&pb.ConnectorAck{Checkpoint: tok})
 
-	got := <-d.ackCh
-	if got != rec {
-		t.Fatalf("unexpected rec from ackCh: %+v", got)
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		if called.Load() == 1 {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("callback not invoked")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-	d.mu.Lock()
-	cb, ok := d.pending[got]
-	if ok {
-		delete(d.pending, got)
+}
+
+func TestAckTrackerResetDropsCallbacks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tracker := newAckTracker[recordID](1)
+	tracker.Start(ctx)
+
+	var called atomic.Int32
+	rec := recordID{"t", 1, 42}
+	tracker.Track(rec, func() { called.Add(1) })
+
+	if dropped := tracker.Reset(); dropped != 1 {
+		t.Fatalf("expected 1 dropped callback, got %d", dropped)
 	}
-	d.mu.Unlock()
-	if !ok {
-		t.Fatal("callback not found in pending map")
-	}
-	cb()
-	if atomic.LoadInt32(&called) != 1 {
-		t.Fatal("callback was not executed exactly once")
+
+	tracker.Ack(rec)
+	// Brief wait to ensure callback would have fired if still registered.
+	time.Sleep(50 * time.Millisecond)
+	if called.Load() != 0 {
+		t.Fatal("callback should have been cleared by reset")
 	}
 }

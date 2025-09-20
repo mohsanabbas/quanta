@@ -3,12 +3,14 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	pb "quanta/api/proto/v1"
 	"time"
 
+	"gopkg.in/yaml.v3"
+	pb "quanta/api/proto/v1"
 	"quanta/internal/config"
 	"quanta/internal/transform"
 	"quanta/sink"
+	sinkkafka "quanta/sink/kafka"
 	"quanta/sink/stdout"
 	"quanta/source/kafka"
 )
@@ -84,6 +86,13 @@ func LoadYAML(path string, r *Runner) error {
 				ValueMaxBytes: cfg.Debug.ValueMaxBytes,
 			})
 
+		case "kafka":
+			var sc sinkkafka.Config
+			if err = decodeSinkConfig(cfg.SinkConfigs.Kafka, &sc); err != nil {
+				err = fmt.Errorf("sink kafka: %w", err)
+				break
+			}
+			err = sDrv.Configure(sc)
 		default:
 			err = fmt.Errorf("no config block for sink %q", name)
 		}
@@ -97,4 +106,15 @@ func LoadYAML(path string, r *Runner) error {
 		r.AddSink(sDrv)
 	}
 	return nil
+}
+
+func decodeSinkConfig[T any](in any, out *T) error {
+	if in == nil {
+		return fmt.Errorf("missing config")
+	}
+	raw, err := yaml.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return yaml.Unmarshal(raw, out)
 }

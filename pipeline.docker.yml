@@ -9,7 +9,7 @@ source:
 transformers:
   - name: uppercase
     type: grpc
-    address: "uppercase:50052"   # service name inside docker network
+    address: "uppercase:50052"
     max_in_flight: 100
     timeout_ms: 1000
     content_type: "application/protobuf"
@@ -19,10 +19,17 @@ transformers:
 
 sinks:
   - stdout
+  - kafka
+
+sink_configs:
+  kafka:
+    brokers:
+      - "kafka:29092"
+    topic: "quanta-output"
+    required_acks: 1
 
 debug:
   per_frame_delay_ms: 0
   print_counter: true
   ack_batch_size: 1
   ack_flush_ms: 0
-

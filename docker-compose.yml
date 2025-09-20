@@ -1,31 +1,85 @@
+version: '3.9'
+
 services:
+  kafka:
+    image: bitnami/kafka:3.7.0
+    container_name: quanta-kafka
+    restart: unless-stopped
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://0.0.0.0:29092,EXTERNAL://0.0.0.0:9094,CONTROLLER://0.0.0.0:9093
+      # - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,EXTERNAL://host.docker.internal:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data
+      - ALLOW_PLAINTEXT_LISTENER=yes
+  
+    ports:
+      - "9094:9094"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks:
+      - quanta-net
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: quanta-kafka-ui
+    restart: unless-stopped
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: PLAINTEXT://kafka:29092
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+    networks:
+      - quanta-net
+
+  uppercase:
+    image: quanta-uppercase:local
+    container_name: quanta-uppercase
+    build:
+      context: .
+      dockerfile: Dockerfile.uppercase
+      args:
+        BIN_DIR: "bin/linux-${ARCH:-amd64}"
+    expose:
+      - "50052"
+    depends_on:
+      - kafka
+    networks:
+      - quanta-net
+
   engine:
     image: quanta-engine:local
+    container_name: quanta-engine
     build:
       context: .
       dockerfile: Dockerfile.engine
       args:
-        BIN_DIR: bin/linux-${ARCH}
+        BIN_DIR: "bin/linux-${ARCH:-amd64}"
     environment:
       - QUANTA_PIPELINE_YML=/config/pipeline.docker.yml
     volumes:
       - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
       - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
     ports:
-      - "9100:9100"   # metrics
+      - "9100:9100"
     depends_on:
+      - kafka
       - uppercase
-
-  uppercase:
-    image: quanta-uppercase:local
-    build:
-      context: .
-      dockerfile: Dockerfile.uppercase
-      args:
-        BIN_DIR: bin/linux-${ARCH}
-    expose:
-      - "50052"
+    networks:
+      - quanta-net
 
 networks:
-  default:
-    name: quanta-net
+  quanta-net:
+    driver: bridge
+
+volumes:
+  kafka_data:

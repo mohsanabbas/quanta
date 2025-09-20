@@ -25,20 +25,17 @@ type SaramaDriver struct {
 	bp    *Controller
 	cp    *Manager[struct{}]
 
-	mu      sync.Mutex
-	pending map[recordID]func()
-
-	ackCh chan recordID
+	mu   sync.Mutex
+	acks *ackTracker[recordID]
 }
 
 func (d *SaramaDriver) Configure(config Config) error {
 	d.cfg, d.mode = config, config.CommitMode
-	d.pending = make(map[recordID]func())
 
 	d.bp = NewController(config.BackPressure.Capacity, config.BackPressure.Capacity/10, config.BackPressure.CheckInt)
 	d.cp = NewManager[struct{}](config.BackPressure.Capacity, config.Checkpoint.CommitInt)
 
-	d.ackCh = make(chan recordID, int(config.BackPressure.Capacity))
+	d.acks = newAckTracker[recordID](int(config.BackPressure.Capacity))
 
 	ver, err := sarama.ParseKafkaVersion(config.Version)
 	if err != nil {
@@ -69,6 +66,7 @@ func (d *SaramaDriver) Configure(config Config) error {
 }
 
 func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
+	d.acks.Start(ctx)
 	handler := &groupHandler{driver: d, emit: emit}
 
 	for {
@@ -85,6 +83,9 @@ func (d *SaramaDriver) Close() error {
 	_ = d.group.Close()
 	_ = d.cl.Close()
 	d.bp.Close()
+	if d.acks != nil {
+		d.acks.Close()
+	}
 	return nil
 }
 
@@ -99,13 +100,13 @@ func (*groupHandler) Setup(sarama.ConsumerGroupSession) error {
 
 func (h *groupHandler) Cleanup(_ sarama.ConsumerGroupSession) error {
 	h.driver.mu.Lock()
-	defer h.driver.mu.Unlock()
-
-	dropped := len(h.driver.pending)
-
-	h.driver.pending = make(map[recordID]func())
-
+	dropped := 0
+	if h.driver.acks != nil {
+		dropped = h.driver.acks.Reset()
+	}
+	h.driver.mu.Unlock()
 	if dropped > 0 {
+		h.driver.bp.Release(int64(dropped))
 		logging.L().Info("sarama-driver: rebalance – cleared pending callbacks", "count", dropped)
 	}
 	return nil
@@ -116,61 +117,23 @@ func (h *groupHandler) ConsumeClaim(
 	claim sarama.ConsumerGroupClaim,
 ) error {
 	for {
-
-		if !h.driver.bp.TryAcquire(1) {
-
-			select {
-			case rec := <-h.driver.ackCh:
-
-				h.driver.mu.Lock()
-				cb, ok := h.driver.pending[rec]
-				if ok {
-					delete(h.driver.pending, rec)
-				}
-				h.driver.mu.Unlock()
-				if ok {
-					cb()
-					h.driver.bp.Release(1)
-					logging.L().Info("kafka ack released", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
-				}
-				continue
-			case <-sess.Context().Done():
-				return sess.Context().Err()
-			}
+		if err := h.driver.bp.Acquire(sess.Context()); err != nil {
+			return err
 		}
 
 		select {
 		case <-sess.Context().Done():
-
 			h.driver.bp.Release(1)
 			return sess.Context().Err()
 
-		case rec := <-h.driver.ackCh:
-
-			h.driver.mu.Lock()
-			cb, ok := h.driver.pending[rec]
-			if ok {
-				delete(h.driver.pending, rec)
-			}
-			h.driver.mu.Unlock()
-			if ok {
-				cb()
-				h.driver.bp.Release(1)
-				logging.L().Info("kafka ack released", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
-			}
-
-			continue
-
 		case msg, ok := <-claim.Messages():
 			if !ok {
-
 				h.driver.bp.Release(1)
 				return nil
 			}
 
 			resolve, err := h.driver.cp.Track(sess.Context(), struct{}{})
 			if err != nil {
-
 				h.driver.bp.Release(1)
 				return err
 			}
@@ -182,32 +145,29 @@ func (h *groupHandler) ConsumeClaim(
 			}
 			frame := &pb.Frame{Key: msg.Key, Value: msg.Value, Headers: toHeaderMap(msg.Headers), Ts: timestamppb.New(msg.Timestamp), Checkpoint: token}
 			if err := h.emit(frame); err != nil {
-
 				h.driver.bp.Release(1)
 				return err
 			}
 
 			rec := recordID{msg.Topic, msg.Partition, msg.Offset}
 			if h.driver.mode == CommitAuto {
-
 				_, due := resolve()
 				sess.MarkMessage(msg, "")
 				if due {
 					sess.Commit()
 				}
-
 				h.driver.bp.Release(1)
+				logging.L().Info("kafka ack released", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
 			} else {
-
-				h.driver.mu.Lock()
-				h.driver.pending[rec] = func() {
+				h.driver.acks.Track(rec, func() {
 					_, due := resolve()
 					sess.MarkMessage(msg, "")
 					if due {
 						sess.Commit()
 					}
-				}
-				h.driver.mu.Unlock()
+					h.driver.bp.Release(1)
+					logging.L().Info("kafka ack released", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
+				})
 			}
 		}
 	}
@@ -223,21 +183,12 @@ func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {
 	}
 	rec := recordID{k.Topic, k.Partition, k.Offset}
 
-	select {
-	case d.ackCh <- rec:
-	default:
-
-		select {
-		case <-d.ackCh:
-		default:
-		}
-		select {
-		case d.ackCh <- rec:
-		default:
-
-			logging.L().Warn("sarama-driver: ack channel full; dropping ack", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
-		}
+	if d.acks != nil {
+		d.acks.Ack(rec)
+		return
 	}
+
+	logging.L().Warn("sarama-driver: ack tracker missing; dropping ack", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
 }
 
 func toHeaderMap(src []*sarama.RecordHeader) map[string][]byte {
