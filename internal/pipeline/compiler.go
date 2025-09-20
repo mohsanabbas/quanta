@@ -43,7 +43,7 @@ func LoadYAML(path string, r *Runner) error {
 	if err != nil {
 		return err
 	}
-	if err = src.Configure(kc); err != nil {
+	if err = src.Configure(context.Background(), kc); err != nil {
 		return err
 	}
 	r.SetSource(src)
@@ -69,34 +69,35 @@ func LoadYAML(path string, r *Runner) error {
 	}
 
 	for _, name := range cfg.Sinks {
-		sDrv, err := sink.NewAdapter(name)
+		sDrv, _, err := sink.New(name)
 		if err != nil {
 			return err
 		}
 
+		var conf any
 		switch name {
 		case "stdout":
 			delay := time.Duration(cfg.Debug.PerFrameDelayMS) * time.Millisecond
-			err = sDrv.Configure(stdout.Config{
+			config := stdout.Config{
 				DelayMS:       int(delay / time.Millisecond),
 				PrintCounter:  cfg.Debug.PrintCounter,
 				BatchSize:     cfg.Debug.AckBatchSize,
 				FlushMS:       cfg.Debug.AckFlushMS,
 				PrintValue:    cfg.Debug.PrintValue,
 				ValueMaxBytes: cfg.Debug.ValueMaxBytes,
-			})
-
+			}
+			conf = config
 		case "kafka":
 			var sc sinkkafka.Config
 			if err = decodeSinkConfig(cfg.SinkConfigs.Kafka, &sc); err != nil {
-				err = fmt.Errorf("sink kafka: %w", err)
-				break
+				return fmt.Errorf("sink kafka: %w", err)
 			}
-			err = sDrv.Configure(sc)
+			conf = sc
 		default:
-			err = fmt.Errorf("no config block for sink %q", name)
+			return fmt.Errorf("no config block for sink %q", name)
 		}
-		if err != nil {
+
+		if err := sDrv.Configure(context.Background(), conf); err != nil {
 			return err
 		}
 

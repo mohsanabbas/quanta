@@ -29,7 +29,7 @@ type SaramaDriver struct {
 	acks *ackTracker[recordID]
 }
 
-func (d *SaramaDriver) Configure(config Config) error {
+func (d *SaramaDriver) Configure(ctx context.Context, config Config) error {
 	d.cfg, d.mode = config, config.CommitMode
 
 	d.bp = NewController(config.BackPressure.Capacity, config.BackPressure.Capacity/10, config.BackPressure.CheckInt)
@@ -66,7 +66,9 @@ func (d *SaramaDriver) Configure(config Config) error {
 }
 
 func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
-	d.acks.Start(ctx)
+	if err := d.acks.Start(ctx); err != nil {
+		return err
+	}
 	handler := &groupHandler{driver: d, emit: emit}
 
 	for {
@@ -79,7 +81,7 @@ func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
 	}
 }
 
-func (d *SaramaDriver) Close() error {
+func (d *SaramaDriver) Close(ctx context.Context) error {
 	_ = d.group.Close()
 	_ = d.cl.Close()
 	d.bp.Close()
@@ -144,7 +146,7 @@ func (h *groupHandler) ConsumeClaim(
 				},
 			}
 			frame := &pb.Frame{Key: msg.Key, Value: msg.Value, Headers: toHeaderMap(msg.Headers), Ts: timestamppb.New(msg.Timestamp), Checkpoint: token}
-			if err := h.emit(frame); err != nil {
+			if err := h.emit(sess.Context(), frame); err != nil {
 				h.driver.bp.Release(1)
 				return err
 			}
@@ -159,7 +161,8 @@ func (h *groupHandler) ConsumeClaim(
 				h.driver.bp.Release(1)
 				logging.L().Info("kafka ack released", "topic", rec.topic, "partition", rec.partition, "offset", rec.offset)
 			} else {
-				h.driver.acks.Track(rec, func() {
+				trackerCtx := sess.Context()
+				h.driver.acks.Track(rec, trackerCtx, func() {
 					_, due := resolve()
 					sess.MarkMessage(msg, "")
 					if due {
@@ -184,7 +187,7 @@ func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {
 	rec := recordID{k.Topic, k.Partition, k.Offset}
 
 	if d.acks != nil {
-		d.acks.Ack(rec)
+		d.acks.Ack(context.Background(), rec)
 		return
 	}
 

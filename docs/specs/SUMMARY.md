@@ -1,0 +1,16 @@
+# Quanta Specification Book
+
+- [Introduction](introduction.md)
+- [Pipeline Model](pipeline-model.md)
+- [Frame Spec](frame-spec.md)
+- [Processor / Transformer Spec](transformer-spec.md)
+- [Source Spec](source-spec.md)
+- [Sink Spec](sink-spec.md)
+- [Filter Spec](filter-spec.md)
+- [Error Handling & E2E Semantics](error-e2e.md)
+- [Configuration Reference](config/index.md)
+  - [Kafka Source](config/kafka-source.md)
+  - [Kafka Sink](config/kafka-sink.md)
+  - [Stdout Sink](config/stdout-sink.md)
+- [Naming Conventions](naming.md)
+- [Examples & Quickstarts](examples.md)

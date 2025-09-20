@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -24,7 +25,7 @@ type driver struct {
 	once sync.Once
 }
 
-func (d *driver) Configure(c any) error {
+func (d *driver) Configure(ctx context.Context, c any) error {
 	cfg, ok := c.(Config)
 	if !ok {
 		return fmt.Errorf("kafka-sink: want Config")
@@ -91,18 +92,29 @@ func (d *driver) validate() error {
 	return nil
 }
 
-func (d *driver) Push(f *pb.Frame) error {
+func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 	msg := &sarama.ProducerMessage{
 		Topic:    d.cfg.Topic,
 		Key:      sarama.ByteEncoder(f.Key),
 		Value:    sarama.ByteEncoder(f.Value),
 		Metadata: f.Checkpoint,
 	}
-	d.p.Input() <- msg
-	return nil
+	if len(f.Headers) > 0 {
+		headers := make([]sarama.RecordHeader, 0, len(f.Headers))
+		for k, v := range f.Headers {
+			headers = append(headers, sarama.RecordHeader{Key: []byte(k), Value: v})
+		}
+		msg.Headers = headers
+	}
+	select {
+	case d.p.Input() <- msg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-func (d *driver) Close() error {
+func (d *driver) Close(ctx context.Context) error {
 	return d.p.Close()
 }
 
@@ -111,5 +123,9 @@ func (d *driver) BindAck(fn sink.EmitFn) {
 }
 
 func init() {
-	sink.Register("kafka", func() sink.Adapter { return &driver{} })
+	sink.Register(sink.Registration{
+		Name:        "kafka",
+		New:         func() sink.Adapter { return &driver{} },
+		ConfigProto: func() any { return Config{} },
+	})
 }

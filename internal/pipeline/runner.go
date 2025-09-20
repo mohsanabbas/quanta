@@ -111,13 +111,16 @@ func toFrames(orig *pb.Frame, events []*pb.Event) []*pb.Frame {
 					g.Headers[k] = []byte(v)
 				}
 			}
+			if keyAttr, ok := md.Attributes["sink.key"]; ok && keyAttr != "" {
+				g.Key = []byte(keyAttr)
+			}
 		}
 		out = append(out, g)
 	}
 	return out
 }
 
-func (r *Runner) pushFrame(f *pb.Frame) error {
+func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 	frames := []*pb.Frame{f}
 
 	for _, st := range r.stages {
@@ -134,12 +137,12 @@ func (r *Runner) pushFrame(f *pb.Frame) error {
 
 			attempts := st.retryAttempts
 			for try := 0; ; try++ {
-				ctx := context.Background()
+				callCtx := ctx
 				var cancel context.CancelFunc
 				if st.timeout > 0 {
-					ctx, cancel = context.WithTimeout(ctx, st.timeout)
+					callCtx, cancel = context.WithTimeout(ctx, st.timeout)
 				}
-				resp, err = st.client.Transform(ctx, req)
+				resp, err = st.client.Transform(callCtx, req)
 				if cancel != nil {
 					cancel()
 				}
@@ -191,7 +194,7 @@ func (r *Runner) pushFrame(f *pb.Frame) error {
 
 	for _, fr := range frames {
 		for _, s := range r.sinks {
-			if err := s.Push(fr); err != nil {
+			if err := s.Publish(ctx, fr); err != nil {
 				return err
 			}
 		}
@@ -203,18 +206,22 @@ func (r *Runner) Start(ctx context.Context) error {
 	if r.source == nil {
 		return errors.New("runner: no source configured")
 	}
-	go func() { _ = r.source.Run(ctx, r.pushFrame) }()
+	go func() {
+		_ = r.source.Run(ctx, func(runCtx context.Context, frame *pb.Frame) error {
+			return r.pushFrame(runCtx, frame)
+		})
+	}()
 	return nil
 }
 
-func (r *Runner) Close() error {
+func (r *Runner) Close(ctx context.Context) error {
 
 	for _, st := range r.stages {
 		_ = st.client.Close()
 	}
 
 	for _, s := range r.sinks {
-		_ = s.Close()
+		_ = s.Close(ctx)
 	}
 	return nil
 }

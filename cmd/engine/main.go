@@ -24,7 +24,10 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	kafka.Register("sarama", func() kafka.Adapter { return &kafka.SaramaDriver{} })
+	kafka.Register(kafka.Registration{
+		Name: "sarama",
+		New:  func() kafka.Adapter { return &kafka.SaramaDriver{} },
+	})
 
 	e, err := engine.Bootstrap(ctx, cfg)
 	if err != nil {

@@ -1,6 +1,7 @@
 package stdout
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sync"
@@ -32,7 +33,7 @@ type driver struct {
 
 var seq uint64
 
-func (d *driver) Configure(raw any) error {
+func (d *driver) Configure(ctx context.Context, raw any) error {
 	c, ok := raw.(Config)
 	if !ok {
 		got := reflect.TypeOf(raw).String()
@@ -46,9 +47,14 @@ func (d *driver) Configure(raw any) error {
 	return nil
 }
 
-func (d *driver) Push(f *pb.Frame) error {
+func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 	if d.cfg.DelayMS > 0 {
-		time.Sleep(time.Duration(d.cfg.DelayMS) * time.Millisecond)
+		delay := time.Duration(d.cfg.DelayMS) * time.Millisecond
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	if d.cfg.PrintCounter {
@@ -87,7 +93,7 @@ func (d *driver) Push(f *pb.Frame) error {
 	return nil
 }
 
-func (d *driver) Close() error {
+func (d *driver) Close(ctx context.Context) error {
 	d.mu.Lock()
 	d.flushLocked()
 	d.mu.Unlock()
@@ -122,5 +128,9 @@ func (d *driver) stopTimerLocked() {
 }
 
 func init() {
-	sink.Register("stdout", func() sink.Adapter { return &driver{} })
+	sink.Register(sink.Registration{
+		Name:        "stdout",
+		New:         func() sink.Adapter { return &driver{} },
+		ConfigProto: func() any { return Config{} },
+	})
 }
