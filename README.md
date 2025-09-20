@@ -1,6 +1,6 @@
 # Quanta
 
-Quanta is a Go streaming engine that takes events from Kafka, runs them through a chain of processors, and delivers the results to sinks (Kafka, stdout, and more to come). The runtime keeps context and backpressure information from the source all the way to the sink so we can offer end-to-end commit semantics.
+Quanta is a Go streaming engine that takes events from Source e.g Kafka, runs them through a chain of processors, and delivers the results to sinks (Kafka, stdout, and more to come). The runtime keeps context and backpressure information from the source all the way to the sink so we can offer end-to-end commit semantics.
 
 **Specifications & Architecture**: the full design notes live in the [Spec Book](docs/specs/SUMMARY.md).
 
@@ -8,7 +8,7 @@ Quanta is a Go streaming engine that takes events from Kafka, runs them through 
 
 - **Kafka `Source` --> Transformer --> Sink** pipeline with at-least-once delivery and optional end-to-end commits.
 - **gRPC transformers** with unary RPC today and a clear path to streaming RPCs tomorrow.
-- **Adapter registry** for sources and sinks—drop in your own driver via `init` registration.
+- **Adapter registry** for sources and sinks drop in your own driver via `init` registration.
 - **Context-aware pipeline** so shutdowns and timeouts behave predictably.
 
 ## Try it out locally
