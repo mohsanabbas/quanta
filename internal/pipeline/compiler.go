@@ -5,27 +5,25 @@ import (
 	"fmt"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	pb "quanta/api/proto/v1"
 	"quanta/internal/config"
 	"quanta/internal/transform"
 	"quanta/sink"
-	sinkkafka "quanta/sink/kafka"
-	"quanta/sink/stdout"
+
 	"quanta/source/kafka"
 )
 
-const supportedPipelineSchema = "v1"
-
-func Compile(path string) (*Runner, error) {
+func Compile(ctx context.Context, path string) (*Runner, error) {
 	r := NewRunner()
-	if err := LoadYAML(path, r); err != nil {
+	if err := LoadYAML(ctx, path, r); err != nil {
 		return nil, err
 	}
 	return r, nil
 }
 
-func LoadYAML(path string, r *Runner) error {
+func LoadYAML(ctx context.Context, path string, r *Runner) error {
+	registerBuiltins()
+
 	cfg, confPath, err := config.LoadPipelineSpec(path)
 	if err != nil {
 		return err
@@ -43,7 +41,7 @@ func LoadYAML(path string, r *Runner) error {
 	if err != nil {
 		return err
 	}
-	if err = src.Configure(context.Background(), kc); err != nil {
+	if err = src.Configure(ctx, kc); err != nil {
 		return err
 	}
 	r.SetSource(src)
@@ -55,7 +53,7 @@ func LoadYAML(path string, r *Runner) error {
 	for _, t := range cfg.Transformers {
 		switch t.Type {
 		case "grpc":
-			cli, err := transform.NewGRPCClient(context.Background(), t.Address)
+			cli, err := transform.NewGRPCClient(ctx, t.Address)
 			if err != nil {
 				return fmt.Errorf("transform %s: dial %s: %w", t.Name, t.Address, err)
 			}
@@ -69,7 +67,7 @@ func LoadYAML(path string, r *Runner) error {
 	}
 
 	for _, name := range cfg.Sinks {
-		sDrv, _, err := sink.New(name)
+		sDrv, proto, err := sink.New(name)
 		if err != nil {
 			return err
 		}
@@ -77,27 +75,24 @@ func LoadYAML(path string, r *Runner) error {
 		var conf any
 		switch name {
 		case "stdout":
-			delay := time.Duration(cfg.Debug.PerFrameDelayMS) * time.Millisecond
-			config := stdout.Config{
-				DelayMS:       int(delay / time.Millisecond),
-				PrintCounter:  cfg.Debug.PrintCounter,
-				BatchSize:     cfg.Debug.AckBatchSize,
-				FlushMS:       cfg.Debug.AckFlushMS,
-				PrintValue:    cfg.Debug.PrintValue,
-				ValueMaxBytes: cfg.Debug.ValueMaxBytes,
+			if cfg.SinkConfigs.Stdout == nil {
+				conf = proto
+			} else {
+				if err := sink.DecodeYAML(cfg.SinkConfigs.Stdout, proto); err != nil {
+					return fmt.Errorf("sink stdout: %w", err)
+				}
+				conf = proto
 			}
-			conf = config
 		case "kafka":
-			var sc sinkkafka.Config
-			if err = decodeSinkConfig(cfg.SinkConfigs.Kafka, &sc); err != nil {
+			if err := sink.DecodeYAML(cfg.SinkConfigs.Kafka, proto); err != nil {
 				return fmt.Errorf("sink kafka: %w", err)
 			}
-			conf = sc
+			conf = proto
 		default:
 			return fmt.Errorf("no config block for sink %q", name)
 		}
 
-		if err := sDrv.Configure(context.Background(), conf); err != nil {
+		if err := sDrv.Configure(ctx, conf); err != nil {
 			return err
 		}
 
@@ -107,15 +102,4 @@ func LoadYAML(path string, r *Runner) error {
 		r.AddSink(sDrv)
 	}
 	return nil
-}
-
-func decodeSinkConfig[T any](in any, out *T) error {
-	if in == nil {
-		return fmt.Errorf("missing config")
-	}
-	raw, err := yaml.Marshal(in)
-	if err != nil {
-		return err
-	}
-	return yaml.Unmarshal(raw, out)
 }

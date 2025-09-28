@@ -38,6 +38,8 @@ type Config struct {
 	SASLUser  string   `koanf:"sasl_user"`
 	SASLPass  string   `koanf:"sasl_pass"`
 
+	SaramaVerbose bool `koanf:"sarama_verbose"`
+
 	CommitMode   CommitMode      `koanf:"commit_mode"`
 	BackPressure BackPressureCfg `koanf:"backpressure"`
 	Checkpoint   CheckpointCfg   `koanf:"checkpoint"`
@@ -47,7 +49,7 @@ func LoadConfig(path string) (Config, error) {
 	k := koanf.New(".")
 	if path != "" {
 		if err := k.Load(file.Provider(path), yaml.Parser()); err != nil &&
-			!errors.Is(err, fs.ErrNotExist) {
+				!errors.Is(err, fs.ErrNotExist) {
 			return Config{}, err
 		}
 	}

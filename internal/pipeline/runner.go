@@ -5,13 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
 	pb "quanta/api/proto/v1"
 	"quanta/internal/transform"
 	"quanta/sink"
 	"quanta/source/kafka"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Runner struct {
@@ -22,6 +24,10 @@ type Runner struct {
 
 	mu   sync.Mutex
 	subs []func(*pb.ConnectorAck)
+
+	runnerAckTotal         atomic.Int64
+	runnerDropTotal        atomic.Int64
+	runnerPublishFailTotal atomic.Int64
 }
 
 type transformStage struct {
@@ -32,13 +38,26 @@ type transformStage struct {
 	retryBackoff  time.Duration
 }
 
-func NewRunner() *Runner { return &Runner{} }
+func NewRunner() *Runner {
+	return &Runner{}
+}
 
-func (r *Runner) AddSink(s sink.Adapter)    { r.sinks = append(r.sinks, s) }
-func (r *Runner) SetSource(s kafka.Adapter) { r.source = s }
+func (r *Runner) AddSink(s sink.Adapter) {
+	r.sinks = append(r.sinks, s)
+}
+
+func (r *Runner) SetSource(s kafka.Adapter) {
+	r.source = s
+}
 
 func (r *Runner) AddTransformer(name string, c transform.Client, timeout time.Duration, attempts int, backoff time.Duration) {
-	r.stages = append(r.stages, transformStage{name: name, client: c, timeout: timeout, retryAttempts: attempts, retryBackoff: backoff})
+	r.stages = append(r.stages, transformStage{
+		name:          name,
+		client:        c,
+		timeout:       timeout,
+		retryAttempts: attempts,
+		retryBackoff:  backoff,
+	})
 }
 
 func (r *Runner) SubscribeAck(fn func(*pb.ConnectorAck)) {
@@ -49,6 +68,7 @@ func (r *Runner) SubscribeAck(fn func(*pb.ConnectorAck)) {
 
 func (r *Runner) Ack(tok *pb.CheckpointToken) {
 	ack := &pb.ConnectorAck{Checkpoint: tok}
+	r.runnerAckTotal.Add(1)
 
 	r.mu.Lock()
 	handlers := append([]func(*pb.ConnectorAck){}, r.subs...)
@@ -102,7 +122,6 @@ func toFrames(orig *pb.Frame, events []*pb.Event) []*pb.Frame {
 		}
 		if md := ev.GetMetadata(); md != nil {
 			if md.TimestampMs > 0 {
-
 				g.Ts = timestamppb.New(time.UnixMilli(md.TimestampMs))
 			}
 			if len(md.Headers) > 0 {
@@ -130,9 +149,7 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 				resp *pb.TransformResponse
 				err  error
 			)
-
 			req := toRequest(in)
-
 			req.PluginId = st.name
 
 			attempts := st.retryAttempts
@@ -152,7 +169,7 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 						time.Sleep(st.retryBackoff)
 						continue
 					}
-
+					r.runnerDropTotal.Add(1)
 					r.Ack(in.Checkpoint)
 					resp = nil
 					break
@@ -160,18 +177,25 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 
 				switch resp.GetStatus() {
 				case pb.Status_OK:
-
 				case pb.Status_DROP:
-
+					r.runnerDropTotal.Add(1)
 					r.Ack(in.Checkpoint)
 					resp.Events = nil
-
+				case pb.Status_RETRY, pb.Status_ERROR:
+					if try < attempts {
+						time.Sleep(st.retryBackoff)
+						continue
+					}
+					r.runnerDropTotal.Add(1)
+					r.Ack(in.Checkpoint)
+					resp.Events = nil
 				default:
 					if try < attempts {
 						time.Sleep(st.retryBackoff)
 						continue
 					}
-
+					//later will become a metric
+					r.runnerDropTotal.Add(1)
 					r.Ack(in.Checkpoint)
 					resp.Events = nil
 				}
@@ -181,24 +205,28 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 			if resp == nil || len(resp.GetEvents()) == 0 {
 				continue
 			}
-
 			outs := toFrames(in, resp.GetEvents())
 			next = append(next, outs...)
 		}
 		frames = next
-		if len(frames) == 0 {
+	}
 
-			return nil
-		}
+	if len(frames) == 0 {
+		r.runnerDropTotal.Add(1)
+		r.Ack(f.Checkpoint)
+		return nil
 	}
 
 	for _, fr := range frames {
 		for _, s := range r.sinks {
 			if err := s.Publish(ctx, fr); err != nil {
+				r.runnerPublishFailTotal.Add(1)
 				return err
 			}
 		}
 	}
+
+	r.Ack(f.Checkpoint)
 	return nil
 }
 
@@ -215,7 +243,6 @@ func (r *Runner) Start(ctx context.Context) error {
 }
 
 func (r *Runner) Close(ctx context.Context) error {
-
 	for _, st := range r.stages {
 		_ = st.client.Close()
 	}

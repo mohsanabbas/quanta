@@ -8,6 +8,7 @@ schema_version: v1
 brokers:
   - "localhost:9094"
 
+
 topics:
   - "event-tracking_track-events-approved"        # change to any topic you have
 
@@ -18,7 +19,7 @@ start_from:  "oldest"
 # Use `kafka-topics --version` or broker logs to confirm.
 version: "3.6.0"
 
-commit_mode: "auto"   # or "e2e"
+commit_mode: "e2e"   # or "auto"
 
 backpressure:
   capacity: 1000        # max frames in memory

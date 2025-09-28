@@ -33,17 +33,22 @@ type driver struct {
 
 var seq uint64
 
-func (d *driver) Configure(ctx context.Context, raw any) error {
-	c, ok := raw.(Config)
+func (d *driver) Configure(_ context.Context, raw any) error {
+	cfg, ok := raw.(Config)
 	if !ok {
-		got := reflect.TypeOf(raw).String()
-		logging.L().With("component", "sink.stdout").Error("invalid config type", "got", got)
-		return errors.New("stdout-sink: invalid config type")
+		// also accept a pointer to Config
+		if p, ok2 := raw.(*Config); ok2 && p != nil {
+			cfg = *p
+		} else {
+			got := reflect.TypeOf(raw).String()
+			logging.L().With("component", "sink.stdout").Error("invalid config type", "got", got)
+			return errors.New("stdout-sink: invalid config type")
+		}
 	}
-	if c.ValueMaxBytes <= 0 {
-		c.ValueMaxBytes = 120
+	if cfg.ValueMaxBytes <= 0 {
+		cfg.ValueMaxBytes = 120
 	}
-	d.cfg = c
+	d.cfg = cfg
 	return nil
 }
 
@@ -58,18 +63,16 @@ func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 	}
 
 	if d.cfg.PrintCounter {
-		attrs := []any{
-			"topic", f.Checkpoint.GetKafka().Topic,
-			"partition", f.Checkpoint.GetKafka().Partition,
-			"offset", f.Checkpoint.GetKafka().Offset,
-			"seq", atomic.AddUint64(&seq, 1),
+		attrs := []any{"seq", atomic.AddUint64(&seq, 1)}
+		if k := f.GetCheckpoint().GetKafka(); k != nil {
+			attrs = append(attrs, "topic", k.Topic, "partition", k.Partition, "offset", k.Offset)
 		}
 		if d.cfg.PrintValue && len(f.Value) > 0 {
-			max := d.cfg.ValueMaxBytes
-			if max > len(f.Value) {
-				max = len(f.Value)
+			maxBytes := d.cfg.ValueMaxBytes
+			if maxBytes > len(f.Value) {
+				maxBytes = len(f.Value)
 			}
-			attrs = append(attrs, "value", string(f.Value[:max]))
+			attrs = append(attrs, "value", string(f.Value[:maxBytes]))
 		}
 		logging.L().Info("sink stdout", attrs...)
 	}
@@ -84,16 +87,13 @@ func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 	}
 
 	if d.cfg.FlushMS > 0 && d.timer == nil {
-		d.timer = time.AfterFunc(
-			time.Duration(d.cfg.FlushMS)*time.Millisecond,
-			d.timerFlush,
-		)
+		d.timer = time.AfterFunc(time.Duration(d.cfg.FlushMS)*time.Millisecond, d.timerFlush)
 	}
 	d.mu.Unlock()
 	return nil
 }
 
-func (d *driver) Close(ctx context.Context) error {
+func (d *driver) Close(_ context.Context) error {
 	d.mu.Lock()
 	d.flushLocked()
 	d.mu.Unlock()
@@ -125,12 +125,4 @@ func (d *driver) stopTimerLocked() {
 		d.timer.Stop()
 		d.timer = nil
 	}
-}
-
-func init() {
-	sink.Register(sink.Registration{
-		Name:        "stdout",
-		New:         func() sink.Adapter { return &driver{} },
-		ConfigProto: func() any { return Config{} },
-	})
 }

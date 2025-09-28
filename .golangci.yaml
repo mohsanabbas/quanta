@@ -1,0 +1,51 @@
+#version: "2"
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: false
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - contextcheck
+    - errorlint
+    - exhaustive
+    - copyloopvar
+    - mnd
+    - gosec
+    - makezero
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - tagliatelle
+    - usetesting
+    - unconvert
+    - unparam
+    - bodyclose
+    - dupl
+    - goconst
+    - gocritic
+    - gocyclo
+    - nakedret
+    - prealloc
+    - stylecheck
+    - whitespace
+  disable:
+    - gochecknoinits
+    - gochecknoglobals
+    - wrapcheck
+
+linters-settings:
+  tagliatelle:
+    case:
+      rules:
+        yaml: snake
+        json: goCamel

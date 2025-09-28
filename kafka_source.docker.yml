@@ -14,12 +14,11 @@ version: "3.6.0"
 
 commit_mode: "e2e"
 
-#backpressure:
-#  capacity: 1000
-#  check_interval: 500ms
+backpressure:
+  capacity: 1000
 
-#checkpoint:
-#  commit_interval: 1s
+checkpoint:
+  commit_interval: 0ms
 
 tls_enabled: false
 sasl_user: ""

@@ -20,13 +20,28 @@ transformers:
 sinks:
   - stdout
   - kafka
+#old
+#sink_configs:
+#  kafka:
+#    brokers:
+#      - "localhost:9094"
+#    topic: "quanta-output"
+#    required_acks: 1
 
+#new
 sink_configs:
+  stdout: {}
   kafka:
-    brokers:
-      - "localhost:9094"
+    brokers: ["localhost:9094"]
     topic: "quanta-output"
-    required_acks: 1
+    version: "3.6.0"
+    client_id: "quanta-sink"
+    acks: "all"               # none|local|all
+    timeout: 10s
+    retry_max: 5
+    retry_backoff_min: 100ms
+    retry_backoff_max: 2s
+    # header_topic_key: "kafka.topic"  # optional
 
 debug:
   per_frame_delay_ms: 0

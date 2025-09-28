@@ -2,17 +2,25 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
-	"quanta/internal/logging"
-	"quanta/source/kafka"
 	"syscall"
 
 	"quanta/internal/engine"
+	"quanta/internal/logging"
+	"quanta/source/kafka"
 )
 
 func main() {
 	logging.InitFromEnv()
+	if err := run(); err != nil {
+		logging.L().Error("engine failed", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pipelinePath := os.Getenv("QUANTA_PIPELINE_YML")
 	if pipelinePath == "" {
 		pipelinePath = "pipeline.yml"
@@ -31,12 +39,11 @@ func main() {
 
 	e, err := engine.Bootstrap(ctx, cfg)
 	if err != nil {
-		logging.L().Error("bootstrap failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 
 	if err := e.Run(ctx); err != nil {
-		logging.L().Error("engine run failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("engine run failed: %w", err)
 	}
+	return nil
 }

@@ -7,6 +7,8 @@ import (
 	pb "quanta/api/proto/v1"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Client interface {
@@ -24,11 +26,23 @@ type GRPCClient struct {
 
 func NewGRPCClient(ctx context.Context, target string, opts ...grpc.DialOption) (*GRPCClient, error) {
 	if len(opts) == 0 {
-		opts = append(opts, grpc.WithInsecure())
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
-	conn, err := grpc.DialContext(ctx, target, opts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, err
+	}
+	if ctx != nil {
+		conn.Connect()
+		for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
+			if !conn.WaitForStateChange(ctx, state) {
+				if err := ctx.Err(); err != nil {
+					_ = conn.Close()
+					return nil, err
+				}
+				break
+			}
+		}
 	}
 	return &GRPCClient{
 		conn: conn,

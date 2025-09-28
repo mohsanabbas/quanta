@@ -9,7 +9,6 @@ import (
 )
 
 func Bootstrap(ctx context.Context, cfg Config) (*Engine, error) {
-
 	srv, err := transport.StartServer(cfg.GRPCPort)
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
@@ -17,7 +16,7 @@ func Bootstrap(ctx context.Context, cfg Config) (*Engine, error) {
 
 	var runner *pipeline.Runner
 	if cfg.PipelineYml != "" {
-		runner, err = pipeline.Compile(cfg.PipelineYml)
+		runner, err = pipeline.Compile(ctx, cfg.PipelineYml)
 		if err != nil {
 			return nil, fmt.Errorf("pipeline: %w", err)
 		}

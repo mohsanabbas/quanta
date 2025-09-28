@@ -34,6 +34,7 @@ type File struct {
 		Kind   string `yaml:"kind"`
 		Driver string `yaml:"driver"`
 		Config string `yaml:"config"`
+		Inline any    `yaml:"inline"`
 	} `yaml:"source"`
 
 	Transformers []TransformerSpec `yaml:"transformers"`

@@ -1,5 +1,5 @@
 ###############################################################################
-# QUANTA Makefile — Go 1.24+
+# QUANTA Makefile — Go 1.25+
 ###############################################################################
 
 # -------- project paths ------------------------------------------------------
@@ -53,6 +53,19 @@ test: proto
 vet:
 	@go vet ./...
 
+lint:
+	@echo "• Running golangci-lint (v1)"
+	@go tool golangci-lint run
+
+lint-checkstyle:
+	@echo "• Running golangci-lint with checkstyle output"
+	@go tool golangci-lint run --out-format checkstyle
+
+lint-fix:
+	@echo "• Running golangci-lint with auto-fix"
+	@go tool golangci-lint run --fix
+
+
 clean:
 	@rm -rf tools/bin
 	@rm -f coverage.out cp.out
@@ -102,4 +115,4 @@ docker-smoke:
 	@sleep 2
 	@curl -sf http://localhost:9100/metrics | head -n 5
 
-.PHONY: proto tools build test vet clean build-linux
+.PHONY: proto tools build test vet lint lint-checkstyle lint-fix clean build-linux

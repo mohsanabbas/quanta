@@ -1,131 +1,244 @@
 package kafka
 
 import (
+	"bytes"
 	"context"
-	"fmt"
-	"sync"
+	"errors"
+	"time"
 
 	pb "quanta/api/proto/v1"
-	"quanta/internal/logging"
-	"quanta/sink"
 
 	"github.com/IBM/sarama"
 )
 
-type Config struct {
-	Brokers []string `yaml:"brokers"`
-	Topic   string   `yaml:"topic"`
-	Acks    int16    `yaml:"required_acks"`
+type SaramaSink struct {
+	cfg    Config
+	prod   sarama.AsyncProducer
+	doneCh chan struct{}
 }
 
-type driver struct {
-	cfg  Config
-	p    sarama.AsyncProducer
-	ack  sink.EmitFn
-	once sync.Once
-}
+type delivery struct{ ch chan error }
 
-func (d *driver) Configure(ctx context.Context, c any) error {
-	cfg, ok := c.(Config)
-	if !ok {
-		return fmt.Errorf("kafka-sink: want Config")
+func (s *SaramaSink) Configure(_ context.Context, raw any) error {
+	// accept both Config and *Config
+	var cfg Config
+	switch v := raw.(type) {
+	case Config:
+		cfg = v
+	case *Config:
+		if v != nil {
+			cfg = *v
+		}
+	default:
+		return errors.New("kafka-sink: invalid config type")
 	}
-	d.cfg = cfg
-	d.defaults()
-	if err := d.validate(); err != nil {
+	if err := cfg.validateAndDefault(); err != nil {
 		return err
 	}
+	s.cfg = cfg
 
-	sc := sarama.NewConfig()
-	sc.Producer.RequiredAcks = sarama.RequiredAcks(d.cfg.Acks)
-	sc.Producer.Return.Successes = true
-	sc.Producer.Return.Errors = true
-	var err error
-	d.p, err = sarama.NewAsyncProducer(d.cfg.Brokers, sc)
+	ver, err := sarama.ParseKafkaVersion(cfg.Version)
 	if err != nil {
 		return err
 	}
-	d.start()
+	sc := sarama.NewConfig()
+	sc.Version = ver
+	if cfg.ClientID != "" {
+		sc.ClientID = cfg.ClientID
+	}
+	sc.Producer.Return.Successes = true
+	sc.Producer.Return.Errors = true
+
+	switch cfg.Acks {
+	case "none":
+		sc.Producer.RequiredAcks = sarama.NoResponse
+	case "local":
+		sc.Producer.RequiredAcks = sarama.WaitForLocal
+	case "all":
+		sc.Producer.RequiredAcks = sarama.WaitForAll
+	}
+
+	sc.Producer.Idempotent = cfg.Idempotent
+	if cfg.Idempotent && sc.Net.MaxOpenRequests != 1 {
+		sc.Net.MaxOpenRequests = 1
+	}
+	sc.Producer.Retry.Max = cfg.RetryMax
+	sc.Producer.Retry.Backoff = cfg.RetryBackoffMin
+	sc.Producer.Retry.BackoffFunc = func(retries, _ int) time.Duration {
+		d := time.Duration(retries) * cfg.RetryBackoffMin
+		if d > cfg.RetryBackoffMax {
+			return cfg.RetryBackoffMax
+		}
+		return d
+	}
+	sc.Producer.Timeout = cfg.Timeout
+
+	switch cfg.Compression {
+	case "none":
+		sc.Producer.Compression = sarama.CompressionNone
+	case "gzip":
+		sc.Producer.Compression = sarama.CompressionGZIP
+	case "snappy":
+		sc.Producer.Compression = sarama.CompressionSnappy
+	case "lz4":
+		sc.Producer.Compression = sarama.CompressionLZ4
+	case "zstd":
+		sc.Producer.Compression = sarama.CompressionZSTD
+	}
+
+	if cfg.TLSEn {
+		sc.Net.TLS.Enable = true
+	}
+	if cfg.SASLUser != "" {
+		sc.Net.SASL.Enable = true
+		sc.Net.SASL.User = cfg.SASLUser
+		sc.Net.SASL.Password = cfg.SASLPass
+	}
+
+	prod, err := sarama.NewAsyncProducer(cfg.Brokers, sc)
+	if err != nil {
+		return err
+	}
+	s.prod = prod
+	s.doneCh = make(chan struct{})
+	go s.pump()
 	return nil
 }
 
-func (d *driver) start() {
-	d.once.Do(func() {
-		go d.dispatch()
-	})
-}
-
-func (d *driver) dispatch() {
-	for {
-		select {
-		case msg, ok := <-d.p.Successes():
-			if !ok {
-				return
-			}
-			if tok, ok := msg.Metadata.(*pb.CheckpointToken); ok && d.ack != nil {
-				d.ack(tok)
-			}
-		case err, ok := <-d.p.Errors():
-			if !ok {
-				return
-			}
-			if err != nil {
-				logging.L().Error("kafka sink publish failed", "topic", d.cfg.Topic, "err", err)
-			}
+func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
+	if s.prod == nil {
+		return errors.New("kafka sink not configured")
+	}
+	topic := s.cfg.Topic
+	if s.cfg.HeaderTopicKey != "" && f.Headers != nil {
+		if v, ok := f.Headers[s.cfg.HeaderTopicKey]; ok && len(v) > 0 {
+			topic = string(v)
 		}
 	}
-}
-
-func (d *driver) defaults() {
-	if d.cfg.Acks == 0 {
-		d.cfg.Acks = int16(sarama.WaitForLocal)
+	if topic == "" {
+		return errors.New("kafka sink: no topic resolved")
 	}
-}
-
-func (d *driver) validate() error {
-	if len(d.cfg.Brokers) == 0 {
-		return fmt.Errorf("kafka-sink: brokers required")
-	}
-	if d.cfg.Topic == "" {
-		return fmt.Errorf("kafka-sink: topic required")
-	}
-	return nil
-}
-
-func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 	msg := &sarama.ProducerMessage{
-		Topic:    d.cfg.Topic,
-		Key:      sarama.ByteEncoder(f.Key),
-		Value:    sarama.ByteEncoder(f.Value),
-		Metadata: f.Checkpoint,
+		Topic:     topic,
+		Key:       sarama.ByteEncoder(bytes.Clone(f.GetKey())),
+		Value:     sarama.ByteEncoder(bytes.Clone(f.GetValue())),
+		Timestamp: tsOrNow(f),
+		Headers:   toRecordHeaders(f.GetHeaders()),
 	}
-	if len(f.Headers) > 0 {
-		headers := make([]sarama.RecordHeader, 0, len(f.Headers))
-		for k, v := range f.Headers {
-			headers = append(headers, sarama.RecordHeader{Key: []byte(k), Value: v})
-		}
-		msg.Headers = headers
+	d := &delivery{ch: make(chan error, 1)}
+	msg.Metadata = d
+
+	select {
+	case s.prod.Input() <- msg:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	select {
-	case d.p.Input() <- msg:
-		return nil
+	case err := <-d.ch:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (d *driver) Close(ctx context.Context) error {
-	return d.p.Close()
+func (s *SaramaSink) Close(_ context.Context) error {
+	if s.prod != nil {
+		s.prod.AsyncClose()
+		<-s.doneCh
+		s.prod = nil
+	}
+	return nil
 }
 
-func (d *driver) BindAck(fn sink.EmitFn) {
-	d.ack = fn
+func (s *SaramaSink) pump() {
+	defer close(s.doneCh)
+	for {
+		select {
+		case pm, ok := <-s.prod.Successes():
+			if !ok {
+				s.flushErrors()
+				return
+			}
+			if d, _ := pm.Metadata.(*delivery); d != nil {
+				select {
+				case d.ch <- nil:
+				default:
+				}
+			}
+		case pe, ok := <-s.prod.Errors():
+			if !ok {
+				s.flushSuccesses()
+				return
+			}
+			if pe != nil {
+				if d, _ := pe.Msg.Metadata.(*delivery); d != nil {
+					select {
+					case d.ch <- pe.Err:
+					default:
+					}
+				}
+			}
+		}
+	}
 }
 
-func init() {
-	sink.Register(sink.Registration{
-		Name:        "kafka",
-		New:         func() sink.Adapter { return &driver{} },
-		ConfigProto: func() any { return Config{} },
-	})
+func (s *SaramaSink) flushErrors() {
+	for {
+		select {
+		case pe, ok := <-s.prod.Errors():
+			if !ok {
+				return
+			}
+			if pe != nil {
+				if d, _ := pe.Msg.Metadata.(*delivery); d != nil {
+					select {
+					case d.ch <- pe.Err:
+					default:
+					}
+				}
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (s *SaramaSink) flushSuccesses() {
+	for {
+		select {
+		case pm, ok := <-s.prod.Successes():
+			if !ok {
+				return
+			}
+			if d, _ := pm.Metadata.(*delivery); d != nil {
+				select {
+				case d.ch <- nil:
+				default:
+				}
+			}
+		default:
+			return
+		}
+	}
+}
+
+func tsOrNow(f *pb.Frame) time.Time {
+	if f.GetTs() != nil {
+		if t := f.GetTs().AsTime(); !t.IsZero() {
+			return t
+		}
+	}
+	return time.Now()
+}
+
+func toRecordHeaders(h map[string][]byte) []sarama.RecordHeader {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make([]sarama.RecordHeader, 0, len(h))
+	for k, v := range h {
+		// sarama wants []byte we already have it
+		out = append(out, sarama.RecordHeader{Key: []byte(k), Value: v})
+	}
+	return out
 }

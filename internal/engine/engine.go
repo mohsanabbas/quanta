@@ -12,7 +12,6 @@ type Engine struct {
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-
 	go func() {
 		<-ctx.Done()
 		e.transport.Stop()

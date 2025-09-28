@@ -6,10 +6,14 @@ import (
 	pb "quanta/api/proto/v1"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func Dial(port int) (pb.ControlClient, error) {
-	cc, err := grpc.Dial(fmt.Sprintf("localhost:%d", port), grpc.WithInsecure())
+	cc, err := grpc.NewClient(
+		fmt.Sprintf("localhost:%d", port),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		return nil, err
 	}

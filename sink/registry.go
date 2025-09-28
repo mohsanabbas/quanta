@@ -3,13 +3,11 @@ package sink
 import (
 	"context"
 	"fmt"
-
 	pb "quanta/api/proto/v1"
 )
 
 type EmitFn func(*pb.CheckpointToken)
 
-// Adapter is implemented by sink drivers.
 type Adapter interface {
 	Configure(ctx context.Context, cfg any) error
 	Publish(ctx context.Context, frame *pb.Frame) error

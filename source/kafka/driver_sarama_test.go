@@ -18,14 +18,14 @@ func TestSaramaDriver_OnAckDispatchesCallback(t *testing.T) {
 	defer cancel()
 
 	d := &SaramaDriver{}
-	d.acks = newAckTracker[recordID](1)
-	if err := d.acks.Start(ctx); err != nil {
+	d.ackManager = newAckTracker[recordID]()
+	if err := d.ackManager.Start(ctx); err != nil {
 		t.Fatalf("start ack tracker: %v", err)
 	}
 
 	var called atomic.Int32
 	rec := recordID{"t", 2, 99}
-	d.acks.Track(rec, ctx, func() {
+	d.ackManager.Track(rec, func() {
 		called.Add(1)
 	})
 
@@ -51,20 +51,20 @@ func TestAckTrackerResetDropsCallbacks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tracker := newAckTracker[recordID](1)
+	tracker := newAckTracker[recordID]()
 	if err := tracker.Start(ctx); err != nil {
 		t.Fatalf("start ack tracker: %v", err)
 	}
 
 	var called atomic.Int32
 	rec := recordID{"t", 1, 42}
-	tracker.Track(rec, ctx, func() { called.Add(1) })
+	tracker.Track(rec, func() { called.Add(1) })
 
 	if dropped := tracker.Reset(); dropped != 1 {
 		t.Fatalf("expected 1 dropped callback, got %d", dropped)
 	}
 
-	tracker.Ack(context.Background(), rec)
+	tracker.Ack(rec)
 	// Brief wait to ensure callback would have fired if still registered.
 	time.Sleep(50 * time.Millisecond)
 	if called.Load() != 0 {
