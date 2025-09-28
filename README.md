@@ -63,6 +63,18 @@ make docker-down
 | `make docker-logs` | Follow container logs. |
 | `make docker-smoke` | Quick health probe of the metrics endpoint. |
 
+## Configuration overview
+
+- `pipeline.yml` defines the logical flow (source → transformers → sinks). For Kafka sources, the public configuration lives in `source.kafka.yaml` and includes only functional settings: brokers, topics, group id, commit mode, credentials, and optional `sarama_verbose`.
+- Performance tuning and operational limits belong in an optional sibling file `source.kafka.tuning.yaml`. Typical fields are `inflight_bytes`, `inflight_msgs`, `window_bits`, `commit_interval`, and `commit_step`.
+- Environment overrides use strict prefixes:
+  - `QUANTA_SOURCE__*` (for example `QUANTA_SOURCE__BROKERS`, `QUANTA_SOURCE__GROUP_ID`).
+  - `QUANTA_TUNING__*` (for example `QUANTA_TUNING__INFLIGHT_BYTES`).
+- On startup the engine validates tuning invariants (`window_bits ≥ 256`, `inflight_msgs ≤ window_bits`, positive commit interval/step) and refuses invalid combinations.
+- Public pipeline changes require a restart. Tuning overrides are read at startup today; hot-reload support will arrive in a later milestone.
+
+See [docs/specs/configuration.md](docs/specs/configuration.md) for a full breakdown of precedence and schema.
+
 ## Troubleshooting quick hits
 
 - **Architecture mismatch**: build binaries for the same arch as the container (`make build-linux ARCH=arm64`).

@@ -37,6 +37,9 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
 		return err
 	}
 
+	// Register default Kafka drivers to ensure the requested driver is available.
+	kafka.RegisterDefaults()
+
 	src, err := kafka.NewAdapter(cfg.Source.Driver)
 	if err != nil {
 		return err
@@ -44,9 +47,11 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
 	if err = src.Configure(ctx, kc); err != nil {
 		return err
 	}
+
 	r.SetSource(src)
 
 	if aw, ok := src.(interface{ OnAck(*pb.ConnectorAck) }); ok {
+
 		r.SubscribeAck(aw.OnAck)
 	}
 
