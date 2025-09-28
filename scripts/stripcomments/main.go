@@ -51,7 +51,7 @@ func stripFile(path string) error {
 	if err := cfg.Fprint(&buf, fset, file); err != nil {
 		return fmt.Errorf("print %s: %w", path, err)
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
 func main() {
@@ -63,7 +63,6 @@ func main() {
 			return err
 		}
 		if d.IsDir() {
-
 			base := filepath.Base(path)
 			if strings.HasPrefix(base, ".") || base == "bin" || base == "tools" {
 				return nil
