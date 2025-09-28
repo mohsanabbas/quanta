@@ -225,10 +225,6 @@ func applyTuningDefaults(t *Tuning) {
 	if t.WindowBits == 0 {
 		t.WindowBits = 4096
 	}
-	// Ensure the window is at least as large as the in‑flight message count.
-	if int64(t.WindowBits) < t.InFlightMsgs {
-		t.InFlightMsgs = int64(t.WindowBits)
-	}
 	if t.CommitInterval <= 0 {
 		t.CommitInterval = 5 * time.Second
 	}
@@ -237,9 +233,6 @@ func applyTuningDefaults(t *Tuning) {
 	}
 }
 
-// validateTuning verifies that tuning values are within acceptable ranges.
-// inflight values must be positive, window size must be >= 256 and at least
-// inflight_msgs, commit_interval and commit_step must be positive.
 func validateTuning(t Tuning) error {
 	if t.InFlightBytes <= 0 {
 		return errors.New("kafka tuning: inflight_bytes must be positive")

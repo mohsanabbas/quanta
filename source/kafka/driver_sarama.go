@@ -253,8 +253,8 @@ func (h *groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sara
 	ps := newPartitionState(h.driver, sess, claim.Topic(), claim.Partition())
 	h.driver.partitions.Store(key, ps)
 	defer func() {
-		h.driver.partitions.Delete(key)
 		ps.shutdown()
+		h.driver.partitions.Delete(key)
 	}()
 	for {
 		msg, ok, err := h.nextMessage(sess, claim)
