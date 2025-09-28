@@ -74,8 +74,7 @@ func (p *PartitionTracker) Reserve(offset int64) uint32 {
 	base := atomic.LoadInt64(&p.base)
 	delta := offset - base
 	if delta < 0 {
-		// Out of order or duplicate map to slot zero for idempotent ack.
-		return 0
+		return InvalidSlot
 	}
 	slot := uint32(delta)
 	if slot >= p.size {
@@ -106,7 +105,15 @@ func (p *PartitionTracker) AckOffset(offset int64) (int64, bool) {
 	slot := uint32(delta)
 	word := slot / 64
 	bit := slot % 64
-	p.window[word] |= 1 << bit
+
+	// Only mark as acked if not already acked | idempotent
+	oldWord := p.window[word]
+	mask := uint64(1) << bit
+	if oldWord&mask != 0 {
+		return base, false
+	}
+
+	p.window[word] |= mask
 	newBase, advanced := p.advanceLocked(base)
 	if advanced {
 		atomic.StoreInt64(&p.base, newBase)
