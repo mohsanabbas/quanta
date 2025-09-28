@@ -49,7 +49,7 @@ func LoadConfig(path string) (Config, error) {
 	k := koanf.New(".")
 	if path != "" {
 		if err := k.Load(file.Provider(path), yaml.Parser()); err != nil &&
-				!errors.Is(err, fs.ErrNotExist) {
+			!errors.Is(err, fs.ErrNotExist) {
 			return Config{}, err
 		}
 	}
