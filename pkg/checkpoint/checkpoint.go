@@ -1,4 +1,4 @@
-package kafka
+package checkpoint
 
 import (
 	"context"
@@ -77,11 +77,7 @@ func NewCapped[T any](capacity int64) *Capped[T] {
 	if capacity <= 0 {
 		capacity = 1
 	}
-	return &Capped[T]{
-		u:    NewUncapped[T](),
-		cap:  capacity,
-		cond: sync.NewCond(&sync.Mutex{}),
-	}
+	return &Capped[T]{u: NewUncapped[T](), cap: capacity, cond: sync.NewCond(&sync.Mutex{})}
 }
 
 func (c *Capped[T]) Track(ctx context.Context, p T, batch int64) (func() *T, error) {

@@ -1,73 +1,68 @@
 package kafka
 
-import (
-	"context"
-	"sync/atomic"
-	"testing"
-	"time"
+import "testing"
 
-	pb "quanta/api/proto/v1"
-)
+func TestPartitionTrackerAdvance(t *testing.T) {
+	tracker := NewPartitionTracker(8)
+	tracker.Reset(100)
 
-func makeKafkaToken(topic string, part int32, off int64) *pb.CheckpointToken {
-	return &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{Kafka: &pb.KafkaOffset{Topic: topic, Partition: part, Offset: off}}}
-}
+	// Reserve offsets 100,101,102
+	tracker.Reserve(100)
+	tracker.Reserve(101)
+	tracker.Reserve(102)
 
-func TestSaramaDriver_OnAckDispatchesCallback(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	d := &SaramaDriver{}
-	d.ackManager = newAckTracker[recordID]()
-	if err := d.ackManager.Start(ctx); err != nil {
-		t.Fatalf("start ack tracker: %v", err)
+	if _, advanced := tracker.AckOffset(101); advanced {
+		t.Fatalf("ack out of order should not advance base")
 	}
 
-	var called atomic.Int32
-	rec := recordID{"t", 2, 99}
-	d.ackManager.Track(rec, func() {
-		called.Add(1)
-	})
+	if base, advanced := tracker.AckOffset(100); !advanced || base != 102 {
+		t.Fatalf("expected base 102 after acking offset 100, got base=%d advanced=%v", base, advanced)
+	}
 
-	tok := makeKafkaToken(rec.topic, rec.partition, rec.offset)
-	d.OnAck(&pb.ConnectorAck{Checkpoint: tok})
-
-	deadline := time.NewTimer(time.Second)
-	defer deadline.Stop()
-	for {
-		if called.Load() == 1 {
-			return
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("callback not invoked")
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
+	if base, advanced := tracker.AckOffset(102); !advanced || base != 103 {
+		t.Fatalf("expected base 103 after acking remaining slots, got base=%d advanced=%v", base, advanced)
 	}
 }
 
-func TestAckTrackerResetDropsCallbacks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func TestPartitionTrackerOverflow(t *testing.T) {
+	tracker := NewPartitionTracker(4)
+	tracker.Reset(10)
+	for i := int64(10); i < 14; i++ {
+		if slot := tracker.Reserve(i); slot == InvalidSlot {
+			t.Fatalf("unexpected overflow for offset %d", i)
+		}
+	}
+	if slot := tracker.Reserve(14); slot != InvalidSlot {
+		t.Fatalf("expected overflow sentinel, got %d", slot)
+	}
+	if base := tracker.Base(); base != 10 {
+		t.Fatalf("base should remain unchanged on overflow, got %d", base)
+	}
+}
 
-	tracker := newAckTracker[recordID]()
-	if err := tracker.Start(ctx); err != nil {
-		t.Fatalf("start ack tracker: %v", err)
+func TestPartitionTrackerAckOutOfWindow(t *testing.T) {
+	tracker := NewPartitionTracker(4)
+	tracker.Reset(50)
+	tracker.Reserve(50)
+	if base, advanced := tracker.AckOffset(80); advanced || base != 50 {
+		t.Fatalf("out-of-window ack should be ignored, base=%d advanced=%v", base, advanced)
+	}
+}
+
+func TestAckerTrackAck(t *testing.T) {
+	ackr := NewAcker(4)
+	handle := ackHandle{offset: 10, bytes: 42}
+	ackr.Track(10, handle)
+
+	h, ok := ackr.Ack(10)
+	if !ok {
+		t.Fatalf("expected ack handle")
+	}
+	if h.offset != handle.offset || h.bytes != handle.bytes {
+		t.Fatalf("unexpected handle values: got %+v want %+v", h, handle)
 	}
 
-	var called atomic.Int32
-	rec := recordID{"t", 1, 42}
-	tracker.Track(rec, func() { called.Add(1) })
-
-	if dropped := tracker.Reset(); dropped != 1 {
-		t.Fatalf("expected 1 dropped callback, got %d", dropped)
-	}
-
-	tracker.Ack(rec)
-	// Brief wait to ensure callback would have fired if still registered.
-	time.Sleep(50 * time.Millisecond)
-	if called.Load() != 0 {
-		t.Fatal("callback should have been cleared by reset")
+	if _, ok := ackr.Ack(10); ok {
+		t.Fatalf("ack should have been removed after first Ack")
 	}
 }

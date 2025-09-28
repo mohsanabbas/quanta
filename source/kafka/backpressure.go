@@ -1,46 +1,40 @@
 package kafka
 
-import "context"
+import (
+	"context"
 
-type Controller struct {
-	ch chan struct{}
+	"golang.org/x/sync/semaphore"
+)
+
+type Backpressure struct {
+	sem      *semaphore.Weighted
+	capacity int64
 }
 
-func NewController(capacity int64) *Controller {
+func NewBackpressure(capacity int64) *Backpressure {
 	if capacity <= 0 {
 		capacity = 1
 	}
-	return &Controller{ch: make(chan struct{}, capacity)}
-}
-
-func (c *Controller) Acquire(ctx context.Context) error {
-	select {
-	case c.ch <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	return &Backpressure{
+		sem:      semaphore.NewWeighted(capacity),
+		capacity: capacity,
 	}
 }
 
-func (c *Controller) TryAcquire() bool {
-	select {
-	case c.ch <- struct{}{}:
-		return true
-	default:
-		return false
+func (b *Backpressure) Acquire(ctx context.Context, n int64) error {
+	if n <= 0 {
+		n = 1
 	}
+	return b.sem.Acquire(ctx, n)
 }
 
-func (c *Controller) Release(n int64) {
-	for i := int64(0); i < n; i++ {
-		select {
-		case <-c.ch:
-		default:
-			return
-		}
+func (b *Backpressure) Release(n int64) {
+	if n <= 0 {
+		n = 1
 	}
+	b.sem.Release(n)
 }
 
-func (c *Controller) Close() {
-	// Nothing to do; channel garbage collects once controller released.
+func (b *Backpressure) Capacity() int64 {
+	return b.capacity
 }
