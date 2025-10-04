@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"time"
 
 	pb "quanta/api/proto/v1"
 	"quanta/internal/config"
@@ -24,7 +23,7 @@ func Compile(ctx context.Context, path string) (*Runner, error) {
 func LoadYAML(ctx context.Context, path string, r *Runner) error {
 	registerBuiltins()
 
-	cfg, confPath, err := config.LoadPipelineSpec(path)
+	cfg, err := config.LoadPipelineSpec(path)
 	if err != nil {
 		return err
 	}
@@ -32,7 +31,11 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
 	if cfg.Source.Kind != "kafka" {
 		return fmt.Errorf("unsupported source %q", cfg.Source.Kind)
 	}
-	kc, err := config.LoadKafkaConfig(confPath)
+	sourceConfPath := cfg.Source.ResolvedConfigPath()
+	if sourceConfPath == "" {
+		return fmt.Errorf("unsupported inline source config for driver %q", cfg.Source.Driver)
+	}
+	kc, err := config.LoadKafkaConfig(sourceConfPath)
 	if err != nil {
 		return err
 	}
@@ -62,9 +65,9 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
 			if err != nil {
 				return fmt.Errorf("transform %s: dial %s: %w", t.Name, t.Address, err)
 			}
-			to := time.Duration(t.TimeoutMS) * time.Millisecond
-			attempts := t.RetryPolicy.Attempts
-			backoff := time.Duration(t.RetryPolicy.BackoffMS) * time.Millisecond
+			to := t.Timeout()
+			attempts := t.Retry.Attempts
+			backoff := t.RetryBackoff()
 			r.AddTransformer(t.Name, cli, to, attempts, backoff)
 		default:
 			return fmt.Errorf("unsupported transformer type %q for %s", t.Type, t.Name)
@@ -80,16 +83,21 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
 		var conf any
 		switch name {
 		case "stdout":
-			if cfg.SinkConfigs.Stdout == nil {
+			node := cfg.SinkConfig(name)
+			if node == nil {
 				conf = proto
 			} else {
-				if err := sink.DecodeYAML(cfg.SinkConfigs.Stdout, proto); err != nil {
+				if err := sink.DecodeYAML(node, proto); err != nil {
 					return fmt.Errorf("sink stdout: %w", err)
 				}
 				conf = proto
 			}
 		case "kafka":
-			if err := sink.DecodeYAML(cfg.SinkConfigs.Kafka, proto); err != nil {
+			node := cfg.SinkConfig(name)
+			if node == nil {
+				return fmt.Errorf("sink kafka: missing configuration block")
+			}
+			if err := sink.DecodeYAML(node, proto); err != nil {
 				return fmt.Errorf("sink kafka: %w", err)
 			}
 			conf = proto

@@ -22,6 +22,15 @@ func DecodeYAML(in any, out any) error {
 			return fmt.Errorf("parse %q: %w", v, err)
 		}
 		return nil
+	case *yaml.Node:
+		if v == nil {
+			return fmt.Errorf("missing config")
+		}
+		raw, err := yaml.Marshal(v)
+		if err != nil {
+			return err
+		}
+		return yaml.Unmarshal(raw, out)
 	default:
 		raw, err := yaml.Marshal(in)
 		if err != nil {

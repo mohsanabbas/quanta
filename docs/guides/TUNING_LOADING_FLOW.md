@@ -37,13 +37,13 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
     registerBuiltins()
     
     // Load pipeline.docker.yml
-    cfg, confPath, err := config.LoadPipelineSpec(path)
+    cfg, err := config.LoadPipelineSpec(path)
     if err != nil {
         return err
     }
     
     // cfg.Source.Config = "kafka_source.docker.yml"
-    // confPath = "/config/kafka_source.docker.yml"
+    // cfg.Source.ResolvedConfigPath() = "/config/kafka_source.docker.yml"
     
     // ...
 }
@@ -51,8 +51,8 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
 
 ### 4. Load Kafka Config (Main + Tuning)
 ```go
-// internal/pipeline/compiler.go:35
-kc, err := config.LoadKafkaConfig(confPath)
+// internal/pipeline/compiler.go:37
+kc, err := config.LoadKafkaConfig(cfg.Source.ResolvedConfigPath())
 if err != nil {
     return err
 }
@@ -187,13 +187,13 @@ func deriveTuningPath(publicPath string) string {
 │    config.LoadPipelineSpec("/config/pipeline.docker.yml")      │
 │    Returns:                                                     │
 │      - cfg.Source.Config = "kafka_source.docker.yml"           │
-│      - confPath = "/config/kafka_source.docker.yml"            │
+│      - cfg.Source.ResolvedConfigPath() = "/config/kafka_..."   │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 4. LOAD KAFKA CONFIG                                            │
-│    config.LoadKafkaConfig("/config/kafka_source.docker.yml")   │
+│    config.LoadKafkaConfig(cfg.Source.ResolvedConfigPath())      │
 │    └─> kafka.LoadConfig()                                       │
 └────────────────────────┬────────────────────────────────────────┘
                          │
@@ -393,5 +393,3 @@ DEBUG: Tuning values:
 
 **The key function:** `loadTuningConfig()` in `source/kafka/config.go:124`  
 **The derivation logic:** `deriveTuningPath()` in `source/kafka/config.go:163`
-
-
