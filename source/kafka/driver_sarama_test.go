@@ -50,8 +50,8 @@ func TestPartitionTrackerAckOutOfWindow(t *testing.T) {
 }
 
 func TestAckerTrackAck(t *testing.T) {
-	ackr := NewAcker(4)
-	handle := ackHandle{offset: 10, bytes: 42}
+	ackr := NewOffsetTracker(4)
+	handle := AckHandle{offset: 10, bytes: 42}
 	ackr.Track(10, handle)
 
 	h, ok := ackr.Ack(10)

@@ -1,0 +1,100 @@
+# ==============================================================================
+# KAFKA SOURCE CONFIGURATION - AUTO MODE (High Throughput)
+# ==============================================================================
+# This configuration uses AUTO commit mode for maximum throughput.
+# Use when: Message loss is acceptable, speed is priority
+# ==============================================================================
+
+schema_version: v1
+
+# Kafka broker addresses (Docker internal network)
+brokers:
+  - "kafka:29092"
+
+# Topics to consume from
+topics:
+  - "event-tracking_track-events-approved"
+
+# Consumer group ID (unique per application)
+group_id: "quanta-src-track-events-approved-auto"
+
+# Start from oldest to process existing messages
+# Options: "oldest" (from beginning) | "newest" (only new messages)
+start_from: "oldest"
+
+# Kafka protocol version
+version: "3.6.0"
+
+# ==============================================================================
+# COMMIT MODE: AUTO (Fire and Forget)
+# ==============================================================================
+# How it works:
+# 1. Message consumed from Kafka
+# 2. Backpressure token acquired (blocks if limit reached)
+# 3. Message emitted to pipeline → transformer → sink
+# 4. Offset IMMEDIATELY marked in Kafka (no wait for ack)
+# 5. Backpressure token IMMEDIATELY released
+# 6. Sarama commits offsets periodically in background
+#
+# What happens to tracking/acks?
+# ❌ Does NOT track offsets in checkpoint manager
+# ❌ Does NOT wait for sink acknowledgments
+# ❌ Sink acks are IGNORED (not used for commits)
+#
+# Backpressure still applies:
+# ✓ Backpressure tokens acquired before emit
+# ✓ Prevents memory overflow if sink is slow
+# ✓ Released immediately after emit (not after ack)
+#
+# Trade-offs:
+# ✓ Maximum throughput (no ack waiting)
+# ✓ Lower memory usage (no tracking)
+# ✓ Lower latency (immediate flow)
+# ✗ No at-least-once guarantee
+# ✗ Messages can be LOST if app crashes after mark but before sink publish
+# ✗ Cannot recover from downstream failures
+# ==============================================================================
+commit_mode: "auto"
+
+# ==============================================================================
+# BACKPRESSURE STRATEGY: Count
+# ==============================================================================
+# Controls flow when downstream is slow
+# - "count": Limits number of concurrent messages (recommended for auto mode)
+# - "size": Limits total bytes (less useful since tokens released quickly)
+# - "combined": Both limits (overkill for auto mode)
+#
+# In AUTO mode, backpressure prevents overload but doesn't track acks:
+# - Token acquired → Emit → Token released immediately
+# - Sink ack arrives later but is IGNORED (not used for backpressure)
+# ==============================================================================
+backpressure_strategy: "count"
+
+# ==============================================================================
+# CHECKPOINT STRATEGY: Sliding Window
+# ==============================================================================
+# Not really used in auto mode (no ack tracking)
+# But still required for config consistency
+# ==============================================================================
+checkpoint_strategy: "sliding_window"
+
+# ==============================================================================
+# COMMIT STRATEGY: Periodic
+# ==============================================================================
+# Determines WHEN Kafka commits happen
+# - "periodic": Commit every T seconds (best for auto mode)
+# - "ack_based": Not useful in auto mode (no ack tracking)
+# - "hybrid": Overkill for auto mode
+#
+# In auto mode, Sarama handles commits in background
+# This setting controls the frequency
+# ==============================================================================
+commit_strategy_type: "periodic"
+
+# Security settings (disabled for local Docker)
+tls_enabled: false
+sasl_user: ""
+sasl_pass: ""
+
+# Verbose Sarama logging (enable for debugging)
+sarama_verbose: false

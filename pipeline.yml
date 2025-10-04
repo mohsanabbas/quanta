@@ -4,7 +4,13 @@ schema_version: v1
 source:
   kind: kafka
   driver: sarama
+  # RECOMMENDED: Balanced E2E mode with automatic tuning
   config: kafka_source.yml
+  # Automatically loads: kafka_source.tuning.yml
+
+  # OTHER OPTIONS (uncomment to test):
+  # config: kafka_source.auto.yml        # High throughput, some loss acceptable
+  # config: kafka_source.safe.yml        # Maximum safety, frequent commits
 
 transformers:
   - name: uppercase
@@ -20,8 +26,6 @@ transformers:
 sinks:
   - stdout
   - kafka
-#old
-#sink_configs:
 #  kafka:
 #    brokers:
 #      - "localhost:9094"

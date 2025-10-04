@@ -69,6 +69,11 @@ services:
     volumes:
       - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
       - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
+      - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
+      - ./kafka_source.docker.auto.yml:/config/kafka_source.docker.auto.yml:ro
+      - ./kafka_source.docker.auto.tuning.yml:/config/kafka_source.docker.auto.tuning.yml:ro
+      - ./kafka_source.docker.safe.yml:/config/kafka_source.docker.safe.yml:ro
+      - ./kafka_source.docker.safe.tuning.yml:/config/kafka_source.docker.safe.tuning.yml:ro
     ports:
       - "9100:9100"
     depends_on:

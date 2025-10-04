@@ -11,7 +11,6 @@ import (
 	pb "quanta/api/proto/v1"
 
 	"github.com/IBM/sarama"
-	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -28,48 +27,46 @@ type SaramaDriver struct {
 	cl    sarama.Client
 	group sarama.ConsumerGroup
 
-	limiterBytes *Backpressure
-	limiterMsgs  *semaphore.Weighted
-
 	baseAttrs  []slog.Attr
-	partitions sync.Map // string -> *partitionState
+	partitions sync.Map // string -> *partitionProcessor
 }
 
 // Configure sets up the SaramaDriver with the provided configuration. It
-// creates the underlying Sarama client and consumer group and prepares
-// backpressure limiters based on the tuning values. Sarama logging is wired
-// through slog based on the SaramaVerbose flag.
+// creates the underlying Sarama client and consumer group. Sarama logging is
+// wired through slog based on the SaramaVerbose flag.
 func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	d.cfg = cfg
-	d.mode = cfg.Public.CommitMode
-	d.tuning = cfg.Tuning
+	pub := cfg.Public()
+	tun := cfg.Tuning()
+	d.mode = pub.CommitMode
+	d.tuning = tun
 
-	if d.tuning.WindowBits < 256 {
-		return fmt.Errorf("kafka tuning: window_bits (%d) must be >= 256", d.tuning.WindowBits)
+	if tun.WindowBits < 256 {
+		return fmt.Errorf("kafka tuning: window_bits (%d) must be >= 256", tun.WindowBits)
 	}
-	if int64(d.tuning.WindowBits) < d.tuning.InFlightMsgs {
-		return fmt.Errorf("kafka tuning: inflight_msgs (%d) must be <= window_bits (%d)", d.tuning.InFlightMsgs, d.tuning.WindowBits)
+	if int64(tun.WindowBits) < tun.InFlightMsgs {
+		return fmt.Errorf("kafka tuning: inflight_msgs (%d) must be <= window_bits (%d)", tun.InFlightMsgs, tun.WindowBits)
 	}
-
-	d.limiterBytes = NewBackpressure(d.tuning.InFlightBytes)
-	d.limiterMsgs = semaphore.NewWeighted(d.tuning.InFlightMsgs)
 
 	d.baseAttrs = []slog.Attr{
-		slog.String("group_id", cfg.Public.GroupID),
-		slog.String("commit_mode", string(cfg.Public.CommitMode)),
-		slog.String("topics", strings.Join(cfg.Public.Topics, ",")),
-		slog.String("brokers", strings.Join(cfg.Public.Brokers, ",")),
-		slog.Bool("sarama_verbose", cfg.Public.SaramaVerbose),
+		slog.String("group_id", pub.GroupID),
+		slog.String("commit_mode", string(pub.CommitMode)),
+		slog.String("topics", strings.Join(pub.Topics, ",")),
+		slog.String("brokers", strings.Join(pub.Brokers, ",")),
+		slog.Bool("sarama_verbose", pub.SaramaVerbose),
+		slog.String("backpressure_strategy", pub.BackpressureStrategy),
+		slog.String("checkpoint_strategy", pub.CheckpointStrategy),
+		slog.String("commit_strategy", pub.CommitStrategyType),
 	}
 
 	d.loggerWithContext(ctx).Info("configuring kafka source driver")
 
 	// Parse Kafka version. An empty version means use the latest supported by Sarama.
 	var ver sarama.KafkaVersion
-	if cfg.Public.Version == "" {
+	if pub.Version == "" {
 		ver = sarama.MaxVersion
 	} else {
-		parsed, err := sarama.ParseKafkaVersion(cfg.Public.Version)
+		parsed, err := sarama.ParseKafkaVersion(pub.Version)
 		if err != nil {
 			d.loggerWithContext(ctx).Error("invalid kafka version", slog.String("error", err.Error()))
 			return err
@@ -80,27 +77,27 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	sc := sarama.NewConfig()
 	sc.Version = ver
 	sc.Consumer.Return.Errors = true
-	if cfg.Public.TLSEn {
+	if pub.TLSEn {
 		sc.Net.TLS.Enable = true
 	}
-	if cfg.Public.SASLUser != "" {
+	if pub.SASLUser != "" {
 		sc.Net.SASL.Enable = true
-		sc.Net.SASL.User = cfg.Public.SASLUser
-		sc.Net.SASL.Password = cfg.Public.SASLPass
+		sc.Net.SASL.User = pub.SASLUser
+		sc.Net.SASL.Password = pub.SASLPass
 	}
-	switch cfg.Public.StartFrom {
+	switch pub.StartFrom {
 	case "oldest":
 		sc.Consumer.Offsets.Initial = sarama.OffsetOldest
 	default:
 		sc.Consumer.Offsets.Initial = sarama.OffsetNewest
 	}
 
-	client, err := sarama.NewClient(cfg.Public.Brokers, sc)
+	client, err := sarama.NewClient(pub.Brokers, sc)
 	if err != nil {
 		d.loggerWithContext(ctx).Error("failed to create sarama client", slog.String("error", err.Error()))
 		return err
 	}
-	group, err := sarama.NewConsumerGroupFromClient(cfg.Public.GroupID, client)
+	group, err := sarama.NewConsumerGroupFromClient(pub.GroupID, client)
 	if err != nil {
 		d.loggerWithContext(ctx).Error("failed to join consumer group", slog.String("error", err.Error()))
 		client.Close()
@@ -110,7 +107,7 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	d.cl = client
 	d.group = group
 
-	if cfg.Public.SaramaVerbose {
+	if pub.SaramaVerbose {
 		sarama.Logger = &saramaSlogAdapter{logger: d.logger(slog.String("library", "sarama"))}
 		d.loggerWithContext(ctx).Info("sarama verbose logging enabled")
 	} else {
@@ -123,14 +120,15 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 
 // Run starts the consumption loop for all configured topics. It blocks until
 // the context is cancelled or an unrecoverable error occurs. Each call to
-// Consume assigns partitions to partitionState instances which handle
+// Consume assigns partitions to partitionProcessor instances which handle
 // individual message processing and ack tracking.
 func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
-	log := d.loggerWithContext(ctx, slog.String("stage", "run"), slog.String("group_id", d.cfg.Public.GroupID))
+	pub := d.cfg.Public()
+	log := d.loggerWithContext(ctx, slog.String("stage", "run"), slog.String("group_id", pub.GroupID))
 	handler := &groupHandler{driver: d, emit: emit}
 	log.Info("starting kafka consume loop")
 	for {
-		if err := d.group.Consume(ctx, d.cfg.Public.Topics, handler); err != nil {
+		if err := d.group.Consume(ctx, pub.Topics, handler); err != nil {
 			if ctx.Err() != nil {
 				log.Info("consume loop exiting due to context", slog.String("reason", ctx.Err().Error()))
 				return ctx.Err()
@@ -164,36 +162,8 @@ func (d *SaramaDriver) Close(context.Context) error {
 	return nil
 }
 
-// acquire obtains backpressure tokens for the given message size. It will
-// block until both a byte token and a message token are available or the
-// context is cancelled. If the second acquisition fails the first is
-// released.
-func (d *SaramaDriver) acquire(ctx context.Context, bytes int64) error {
-	if bytes <= 0 {
-		bytes = 1
-	}
-	if err := d.limiterBytes.Acquire(ctx, bytes); err != nil {
-		return err
-	}
-	if err := d.limiterMsgs.Acquire(ctx, 1); err != nil {
-		d.limiterBytes.Release(bytes)
-		return err
-	}
-	return nil
-}
-
-// release returns the acquired backpressure tokens. It must be called once
-// per successful acquisition regardless of whether the message was emitted.
-func (d *SaramaDriver) release(bytes int64) {
-	if bytes <= 0 {
-		bytes = 1
-	}
-	d.limiterMsgs.Release(1)
-	d.limiterBytes.Release(bytes)
-}
-
 // OnAck is invoked by the pipeline when a ConnectorAck is received. It
-// forwards the ack to the appropriate partitionState which will advance
+// forwards the ack to the appropriate partitionProcessor which will advance
 // the commit window and release backpressure tokens accordingly.
 func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {
 	if ack == nil || ack.Checkpoint == nil {
@@ -214,22 +184,13 @@ func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {
 		)
 		return
 	}
-	ps := value.(*partitionState)
-	handle, found := ps.acker.Ack(kafkaAck.Offset)
-	if !found {
-		d.logger(slog.String("stage", "ack"), slog.String("status", "missing")).Debug(
-			"ack with no pending record",
-			slog.String("topic", kafkaAck.Topic),
-			slog.Int("partition", int(kafkaAck.Partition)),
-			slog.Int64("offset", kafkaAck.Offset),
-		)
-		return
-	}
-	ps.handleAck(handle)
+	pp := value.(*partitionProcessor)
+	handle := AckHandle{offset: kafkaAck.Offset, bytes: 0} // bytes handled by checkpoint manager
+	pp.OnAck(handle)
 }
 
 // groupHandler is a Sarama ConsumerGroupHandler that delegates message
-// processing to partitionState instances.
+// processing to partitionProcessor instances.
 type groupHandler struct {
 	driver *SaramaDriver
 	emit   EmitFunc
@@ -239,23 +200,55 @@ type groupHandler struct {
 func (*groupHandler) Setup(sarama.ConsumerGroupSession) error { return nil }
 
 // Cleanup is called at the end of a session. We do nothing here because
-// partitionState.shutdown handles flushing and releasing resources when
+// partitionProcessor.Shutdown handles flushing and releasing resources when
 // partitions are revoked.
 func (h *groupHandler) Cleanup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
 // ConsumeClaim runs the partition loop for a single assigned partition. It
-// constructs a partitionState, stores it in the driver's map, and processes
-// messages until the claim is closed.
+// constructs a partitionProcessor using the component factory, stores it in
+// the driver's map, and processes messages until the claim is closed.
 func (h *groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	key := partitionKey(claim.Topic(), claim.Partition())
-	ps := newPartitionState(h.driver, sess, claim.Topic(), claim.Partition())
-	h.driver.partitions.Store(key, ps)
+
+	// Create strategy components using package-level factory functions
+	backpressureMgr, err := NewBackpressureManager(h.driver.cfg)
+	if err != nil {
+		return fmt.Errorf("create backpressure manager: %w", err)
+	}
+
+	checkpointMgr, err := NewCheckpointManager(h.driver.cfg)
+	if err != nil {
+		return fmt.Errorf("create checkpoint manager: %w", err)
+	}
+
+	logger := h.driver.logger(
+		slog.String("topic", claim.Topic()),
+		slog.Int("partition", int(claim.Partition())),
+	)
+	commitStrategy, err := NewCommitStrategy(h.driver.cfg, logger)
+	if err != nil {
+		return fmt.Errorf("create commit strategy: %w", err)
+	}
+
+	// Create the partition processor with injected dependencies
+	pp := newPartitionProcessor(
+		h.driver,
+		sess,
+		claim.Topic(),
+		claim.Partition(),
+		backpressureMgr,
+		checkpointMgr,
+		commitStrategy,
+	)
+
+	h.driver.partitions.Store(key, pp)
 	defer func() {
-		ps.shutdown()
+		pp.Shutdown()
 		h.driver.partitions.Delete(key)
 	}()
+
 	for {
 		msg, ok, err := h.nextMessage(sess, claim)
 		if err != nil {
@@ -267,7 +260,7 @@ func (h *groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sara
 		if !ok {
 			return nil
 		}
-		if err := ps.processMessage(sess, msg, h.emit); err != nil {
+		if err := pp.ProcessMessage(sess, msg, h.emit); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}

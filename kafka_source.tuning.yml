@@ -1,0 +1,170 @@
+# ==============================================================================
+# KAFKA SOURCE TUNING CONFIGURATION
+# ==============================================================================
+# This file contains internal tuning parameters for the Kafka source.
+# Place this file alongside your main config (e.g., kafka_source.yml)
+# with the naming pattern: <base_name>.tuning.<extension>
+#
+# Example: kafka_source.yml → kafka_source.tuning.yml
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# IN-FLIGHT LIMITS (Backpressure Control)
+# ------------------------------------------------------------------------------
+
+# Maximum bytes held in-flight (for size-based or combined backpressure)
+# - Auto mode: Released immediately after emit
+# - E2E mode: Held until sink acknowledges
+# Default: 256 MiB (268435456 bytes)
+inflight_bytes: 268435456
+
+# Maximum number of messages held in-flight
+# - Auto mode: Limits concurrent processing
+# - E2E mode: Limits unacknowledged messages
+# Default: 4096 messages
+inflight_msgs: 4096
+
+# ------------------------------------------------------------------------------
+# CHECKPOINT WINDOW (E2E Mode Only)
+# ------------------------------------------------------------------------------
+
+# Sliding window size in bits (must be power of 2)
+# - Must be >= inflight_msgs
+# - Larger window = more memory but better out-of-order ack handling
+# - Minimum: 256, Default: 4096
+window_bits: 4096
+
+# ------------------------------------------------------------------------------
+# COMMIT TIMING
+# ------------------------------------------------------------------------------
+
+# Time interval for periodic commits
+# - Hybrid/Periodic strategy: commit at least this often
+# - 0 means only commit on step-based triggers
+# Default: 5s
+commit_interval: 5s
+
+# Number of messages to advance before committing
+# - Ack-based/Hybrid strategy: commit every N messages
+# - 0 means only commit on time-based triggers
+# Default: 128
+commit_step: 128
+
+
+# ==============================================================================
+# TUNING RECIPES FOR DIFFERENT SCENARIOS
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# RECIPE 1: High Throughput (Auto Mode)
+# ------------------------------------------------------------------------------
+# Use with: commit_mode: "auto"
+# Goal: Maximum messages/sec
+# ------------------------------------------------------------------------------
+# inflight_bytes: 536870912    # 512 MiB
+# inflight_msgs: 10000          # Large buffer
+# window_bits: 16384            # Large window (not critical in auto mode)
+# commit_interval: 10s          # Less frequent commits
+# commit_step: 500              # Larger batches
+
+# ------------------------------------------------------------------------------
+# RECIPE 2: Balanced E2E (Recommended)
+# ------------------------------------------------------------------------------
+# Use with: commit_mode: "e2e", commit_strategy_type: "hybrid"
+# Goal: Good throughput + safety
+# ------------------------------------------------------------------------------
+# inflight_bytes: 268435456    # 256 MiB
+# inflight_msgs: 4096           # Standard buffer
+# window_bits: 8192             # 2x inflight_msgs for headroom
+# commit_interval: 5s           # Commit every 5 seconds
+# commit_step: 128              # Or every 128 messages
+
+# ------------------------------------------------------------------------------
+# RECIPE 3: Maximum Safety E2E
+# ------------------------------------------------------------------------------
+# Use with: commit_mode: "e2e", commit_strategy_type: "hybrid"
+# Goal: Minimize replay window
+# ------------------------------------------------------------------------------
+# inflight_bytes: 67108864     # 64 MiB (smaller buffer)
+# inflight_msgs: 1000           # Limited in-flight
+# window_bits: 2048             # 2x inflight_msgs
+# commit_interval: 2s           # Frequent commits
+# commit_step: 50               # Small batches
+
+# ------------------------------------------------------------------------------
+# RECIPE 4: Large Batch Processing
+# ------------------------------------------------------------------------------
+# Use with: commit_mode: "e2e", commit_strategy_type: "periodic"
+# Goal: Handle massive throughput spikes
+# ------------------------------------------------------------------------------
+# inflight_bytes: 1073741824   # 1 GiB (need lots of RAM)
+# inflight_msgs: 20000          # Very large buffer
+# window_bits: 32768            # Large window for out-of-order acks
+# commit_interval: 30s          # Infrequent commits (accept replay)
+# commit_step: 1000             # Large step
+
+# ------------------------------------------------------------------------------
+# RECIPE 5: Low Latency E2E
+# ------------------------------------------------------------------------------
+# Use with: commit_mode: "e2e", commit_strategy_type: "hybrid"
+# Goal: Minimize end-to-end latency
+# ------------------------------------------------------------------------------
+# inflight_bytes: 33554432     # 32 MiB (small buffer)
+# inflight_msgs: 500            # Very limited in-flight
+# window_bits: 1024             # Small window
+# commit_interval: 1s           # Very frequent commits
+# commit_step: 10               # Tiny batches
+
+
+# ==============================================================================
+# ENVIRONMENT VARIABLE OVERRIDES
+# ==============================================================================
+# You can override any tuning parameter using environment variables:
+#
+# QUANTA_TUNING__INFLIGHT_BYTES=536870912
+# QUANTA_TUNING__INFLIGHT_MSGS=10000
+# QUANTA_TUNING__WINDOW_BITS=16384
+# QUANTA_TUNING__COMMIT_INTERVAL=10s
+# QUANTA_TUNING__COMMIT_STEP=500
+#
+# Note: Double underscore (__) separates the prefix from the key
+# ==============================================================================
+
+
+# ==============================================================================
+# TUNING GUIDELINES
+# ==============================================================================
+
+# 1. MEMORY USAGE ESTIMATION
+#    Memory ≈ inflight_msgs × avg_message_size + window_bits/8 bytes
+#    Example: 4096 msgs × 10KB + 4096/8 = 40MB + 512B ≈ 40MB per partition
+
+# 2. WINDOW_BITS RULE
+#    Always set: window_bits >= inflight_msgs
+#    Recommended: window_bits = 2 × inflight_msgs (for out-of-order acks)
+
+# 3. COMMIT_INTERVAL vs COMMIT_STEP
+#    - Fast acks → Use commit_step (ack-based or hybrid)
+#    - Slow acks → Use commit_interval (periodic or hybrid)
+#    - Hybrid mode: Uses whichever triggers first
+
+# 4. BACKPRESSURE TUNING
+#    - High throughput → Increase inflight_bytes and inflight_msgs
+#    - Low latency → Decrease inflight_bytes and inflight_msgs
+#    - Memory constrained → Use count strategy, lower inflight_msgs
+
+# 5. COMMIT FREQUENCY TRADE-OFFS
+#    More frequent commits:
+#      ✓ Smaller replay window on restart
+#      ✓ Better progress visibility
+#      ✗ Higher Kafka broker load
+#      ✗ Slightly lower throughput
+#
+#    Less frequent commits:
+#      ✓ Higher throughput
+#      ✓ Lower broker load
+#      ✗ Larger replay window
+#      ✗ More duplicates on restart
+
+# ==============================================================================
+

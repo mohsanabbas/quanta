@@ -1,25 +1,98 @@
-# schema_version for Kafka source spec (Docker)
+# .....................................................................................
+# KAFKA SOURCE CONFIGURATION (Docker Environment)
+# .....................................................................................
+# This configuration uses E2E (end-to-end) commit mode for at-least-once
+# delivery semantics. Messages are only committed after the sink acknowledges.
+# .....................................................................................
+
 schema_version: v1
 
+# Kafka broker addresses (Docker internal network)
 brokers:
   - "kafka:29092"
 
+# Topics to consume from
 topics:
   - "event-tracking_track-events-approved"
 
+# Consumer group ID (unique per application)
 group_id: "quanta-src-track-events-approved"
+
+# Start from oldest to reprocess all messages
+# Options: "oldest" (from beginning) | "newest" (only new messages)
 start_from: "oldest"
 
+# Kafka protocol version
 version: "3.6.0"
 
+# .....................................................................................
+# COMMIT MODE: E2E (End-to-End)
+# .....................................................................................
+# How it works:
+# 1. Message consumed from Kafka
+# 2. Backpressure token acquired (blocks if limit reached)
+# 3. Message tracked in checkpoint manager
+# 4. Message emitted to pipeline → transformer → sink
+# 5. Sink publishes and sends ack back
+# 6. On ack: Backpressure released + Offset committed to Kafka
+# 7. Periodic commits (every 5s) ensure progress even with out-of-order acks
+#
+# Trade-offs:
+# ✓ At-least-once delivery (no message loss)
+# ✓ Safe restarts (only committed offsets skipped)
+# ✗ Lower throughput (backpressure held until ack)
+# ✗ Higher memory (tracks all in-flight messages)
+# .....................................................................................
 commit_mode: "e2e"
 
-backpressure:
-  capacity: 1000
+# .....................................................................................
+# BACKPRESSURE STRATEGY: Combined
+# .....................................................................................
+# Controls flow when downstream is slow or memory is constrained
+# - "count": Limits number of in-flight messages only
+# - "size": Limits total bytes of in-flight messages only
+# - "combined": Limits BOTH count AND size (recommended)
+#
+# In E2E mode, backpressure is CRITICAL because:
+# - Messages held in memory until ack arrives
+# - Without limits, OOM (out of memory) can occur
+# .....................................................................................
+backpressure_strategy: "combined"
 
-checkpoint:
-  commit_interval: 0ms
+# .....................................................................................
+# CHECKPOINT STRATEGY: Sliding Window
+# .....................................................................................
+# Tracks which offsets have been acknowledged
+# - "sliding_window": Efficient bitmap-based tracking, handles out-of-order acks
+# - "application_controlled": Simple map-based, only for in-order processing
+#
+# Recommended: sliding_window (handles async processing better)
+# .....................................................................................
+checkpoint_strategy: "sliding_window"
 
+# .....................................................................................
+# COMMIT STRATEGY: Hybrid
+# .....................................................................................
+# Determines WHEN to commit offsets to Kafka
+# - "ack_based": Commit every N messages (step-based)
+# - "periodic": Commit every T seconds (time-based)
+# - "hybrid": Commit every N messages OR T seconds (whichever comes first)
+#
+# Hybrid is recommended because:
+# ✓ Commits on progress (every N messages)
+# ✓ Commits on time (prevents stuck partitions)
+# ✓ Handles both fast and slow ack rates
+#
+# Default tuning (in kafka_source.docker.tuning.yml):
+# - commit_step: 128 messages
+# - commit_interval: 5 seconds
+# .....................................................................................
+commit_strategy_type: "hybrid"
+
+# Security settings (disabled for local Docker)
 tls_enabled: false
 sasl_user: ""
 sasl_pass: ""
+
+# Verbose Sarama logging (enable for debugging)
+sarama_verbose: false

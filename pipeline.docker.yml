@@ -4,7 +4,13 @@ schema_version: v1
 source:
   kind: kafka
   driver: sarama
+  # RECOMMENDED: Balanced E2E mode with automatic tuning
   config: kafka_source.docker.yml
+  # Automatically loads: kafka_source.docker.tuning.yml
+
+  # OTHER OPTIONS (uncomment to test):
+  # config: kafka_source.docker.auto.yml        # High throughput, some loss acceptable
+#  config: kafka_source.docker.safe.yml        # Maximum safety, frequent commits
 
 transformers:
   - name: uppercase
@@ -22,7 +28,7 @@ sinks:
   - kafka
 
 sink_configs:
-#  stdout: {}       # <— add this
+#  stdout: {}       # Uncomment for debugging
   kafka:
     brokers: ["kafka:29092"]
     topic: "quanta-output"
@@ -33,7 +39,6 @@ sink_configs:
     retry_max: 5
     retry_backoff_min: 100ms
     retry_backoff_max: 2s
-
 
 debug:
   per_frame_delay_ms: 0

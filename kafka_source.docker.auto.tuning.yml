@@ -1,0 +1,66 @@
+# ==============================================================================
+# KAFKA SOURCE TUNING - AUTO MODE
+# ==============================================================================
+# Tuning for AUTO commit mode (high throughput)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# IN-FLIGHT LIMITS (Backpressure Control)
+# ------------------------------------------------------------------------------
+
+# Not critical in auto mode since tokens released immediately
+# But still prevents memory overflow if emit() is slow
+inflight_bytes: 536870912  # 512 MiB (larger buffer OK)
+
+# Maximum concurrent messages in pipeline
+# Auto mode: Released after emit, not after ack
+# Can be much higher than E2E mode
+inflight_msgs: 10000
+
+# ------------------------------------------------------------------------------
+# CHECKPOINT WINDOW
+# ------------------------------------------------------------------------------
+
+# Not used in auto mode (no ack tracking)
+# But still required for config consistency
+window_bits: 16384
+
+# ------------------------------------------------------------------------------
+# COMMIT TIMING (Periodic Strategy)
+# ------------------------------------------------------------------------------
+
+# Commit every 10 seconds
+# Auto mode: Sarama commits marked offsets periodically
+# Larger interval = better throughput, larger replay on crash
+commit_interval: 10s
+
+# Not used in auto mode (no step-based commits)
+commit_step: 500
+
+# ==============================================================================
+# AUTO MODE CHARACTERISTICS
+# ==============================================================================
+#
+# 1. BACKPRESSURE LIFECYCLE:
+#    - Acquire token → Emit to pipeline → Release token IMMEDIATELY
+#    - Sink ack arrives later but is IGNORED
+#    - Only prevents overload, doesn't track completion
+#
+# 2. COMMIT BEHAVIOR:
+#    - Offsets marked immediately after emit
+#    - Sarama commits marked offsets every commit_interval
+#    - No wait for sink acknowledgment
+#
+# 3. MEMORY USAGE:
+#    Much lower than E2E mode because:
+#    - No checkpoint tracking (no bitmap)
+#    - Tokens released immediately
+#    - Only brief buffering during emit
+#
+# 4. FAILURE SCENARIOS:
+#    - App crashes after mark but before sink publish → MESSAGE LOST
+#    - Sink fails to publish → Offset already committed, cannot retry
+#    - Use only when message loss is acceptable!
+#
+# ==============================================================================
+

@@ -33,24 +33,27 @@ const (
 
 // PublicConfig holds user‑visible configuration for the Kafka source driver.
 // These values are loaded from YAML and environment variables and control
-// functional behaviour such as which brokers to connect to and which topics
+// functional behavior such as which brokers to connect to and which topics
 // to consume.
 type PublicConfig struct {
-	Brokers       []string   `koanf:"brokers"`
-	Topics        []string   `koanf:"topics"`
-	GroupID       string     `koanf:"group_id"`
-	StartFrom     string     `koanf:"start_from"`
-	Version       string     `koanf:"version"`
-	TLSEn         bool       `koanf:"tls_enabled"`
-	SASLUser      string     `koanf:"sasl_user"`
-	SASLPass      string     `koanf:"sasl_pass"`
-	CommitMode    CommitMode `koanf:"commit_mode"`
-	SaramaVerbose bool       `koanf:"sarama_verbose"`
+	Brokers              []string   `koanf:"brokers"`
+	Topics               []string   `koanf:"topics"`
+	GroupID              string     `koanf:"group_id"`
+	StartFrom            string     `koanf:"start_from"`
+	Version              string     `koanf:"version"`
+	TLSEn                bool       `koanf:"tls_enabled"`
+	SASLUser             string     `koanf:"sasl_user"`
+	SASLPass             string     `koanf:"sasl_pass"`
+	CommitMode           CommitMode `koanf:"commit_mode"`
+	SaramaVerbose        bool       `koanf:"sarama_verbose"`
+	BackpressureStrategy string     `koanf:"backpressure_strategy"`
+	CheckpointStrategy   string     `koanf:"checkpoint_strategy"`
+	CommitStrategyType   string     `koanf:"commit_strategy_type"`
 }
 
 // Tuning contains internal knobs for the Kafka source driver. These values are
 // not intended to be surfaced to end users directly and primarily control
-// backpressure and checkpoint behaviour. A separate YAML file with the same
+// backpressure and checkpoint behavior. A separate YAML file with the same
 // base name and a `.tuning` suffix may override these values.
 type Tuning struct {
 	InFlightBytes  int64         `koanf:"inflight_bytes"`
@@ -60,19 +63,21 @@ type Tuning struct {
 	CommitStep     uint32        `koanf:"commit_step"`
 }
 
-// Config groups the public configuration and tuning parameters together. This
-// type is passed into the Kafka driver on Configure() calls.
 type Config struct {
-	Public PublicConfig
-	Tuning Tuning
+	public PublicConfig
+	tuning Tuning
 }
 
-// LoadConfig loads the public and tuning configuration from the provided
-// filesystem path. The public configuration is loaded from the file exactly as
-// specified. If a sibling file with the same name but a `.tuning` suffix
-// exists it will be loaded for the tuning configuration. Environment variables
-// prefixed with `QUANTA_SOURCE__` and `QUANTA_TUNING__` override values in
-// the respective sections.
+// Public returns a copy of the public configuration.
+func (c Config) Public() PublicConfig {
+	return c.public
+}
+
+// Tuning returns a copy of the tuning configuration.
+func (c Config) Tuning() Tuning {
+	return c.tuning
+}
+
 func LoadConfig(path string) (Config, error) {
 	var cfg Config
 	public, err := loadPublicConfig(path)
@@ -83,8 +88,8 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	cfg.Public = public
-	cfg.Tuning = tuning
+	cfg.public = public
+	cfg.tuning = tuning
 	return cfg, nil
 }
 
@@ -95,8 +100,7 @@ func loadPublicConfig(path string) (PublicConfig, error) {
 			return PublicConfig{}, err
 		}
 	}
-	// Environment variables override file values. Keys are mapped from
-	// QUANTA_SOURCE__FOO__BAR to foo.bar.
+
 	if err := k.Load(env.Provider("QUANTA_SOURCE__", "__", publicEnvKey), nil); err != nil {
 		return PublicConfig{}, err
 	}
@@ -113,7 +117,6 @@ func loadPublicConfig(path string) (PublicConfig, error) {
 
 func loadTuningConfig(publicPath string) (Tuning, error) {
 	k := koanf.New(".")
-	// If a tuning file exists alongside the public config, load it.
 	if publicPath != "" {
 		if tuningPath := deriveTuningPath(publicPath); tuningPath != "" {
 			if _, err := os.Stat(tuningPath); err == nil {
@@ -125,8 +128,7 @@ func loadTuningConfig(publicPath string) (Tuning, error) {
 			}
 		}
 	}
-	// Environment variables override file values. Keys are mapped from
-	// QUANTA_TUNING__FOO__BAR to foo.bar.
+
 	if err := k.Load(env.Provider("QUANTA_TUNING__", "__", tuningEnvKey), nil); err != nil {
 		return Tuning{}, err
 	}
@@ -141,9 +143,6 @@ func loadTuningConfig(publicPath string) (Tuning, error) {
 	return tuning, nil
 }
 
-// deriveTuningPath constructs the path to the tuning configuration by
-// inserting ".tuning" before the file extension. For example,
-// config.yaml → config.tuning.yaml.
 func deriveTuningPath(publicPath string) string {
 	if publicPath == "" {
 		return ""
@@ -156,26 +155,18 @@ func deriveTuningPath(publicPath string) string {
 	return base + ".tuning" + ext
 }
 
-// publicEnvKey transforms QUANTA_SOURCE__FOO__BAR into foo.bar for the koanf
-// environment provider.
 func publicEnvKey(key string) string {
 	key = strings.TrimPrefix(key, "QUANTA_SOURCE__")
 	key = strings.ReplaceAll(key, "__", ".")
 	return strings.ToLower(key)
 }
 
-// tuningEnvKey transforms QUANTA_TUNING__FOO__BAR into foo.bar for the koanf
-// environment provider.
 func tuningEnvKey(key string) string {
 	key = strings.TrimPrefix(key, "QUANTA_TUNING__")
 	key = strings.ReplaceAll(key, "__", ".")
 	return strings.ToLower(key)
 }
 
-// applyPublicDefaults sets default values on the public configuration when
-// fields are missing. CommitMode defaults to auto and StartFrom defaults to
-// newest. The CommitMode and StartFrom values are also normalized to lower
-// case.
 func applyPublicDefaults(c *PublicConfig) {
 	if c.CommitMode == "" {
 		c.CommitMode = CommitAuto
@@ -185,6 +176,18 @@ func applyPublicDefaults(c *PublicConfig) {
 		c.StartFrom = "newest"
 	}
 	c.StartFrom = strings.ToLower(c.StartFrom)
+	if c.BackpressureStrategy == "" {
+		c.BackpressureStrategy = "combined"
+	}
+	c.BackpressureStrategy = strings.ToLower(c.BackpressureStrategy)
+	if c.CheckpointStrategy == "" {
+		c.CheckpointStrategy = "sliding_window"
+	}
+	c.CheckpointStrategy = strings.ToLower(c.CheckpointStrategy)
+	if c.CommitStrategyType == "" {
+		c.CommitStrategyType = "hybrid"
+	}
+	c.CommitStrategyType = strings.ToLower(c.CommitStrategyType)
 }
 
 // validatePublic checks that required fields are present and values are

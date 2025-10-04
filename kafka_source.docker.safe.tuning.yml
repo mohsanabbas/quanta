@@ -1,0 +1,5 @@
+inflight_bytes: 67108864   # 64 MiB (smaller buffer)
+inflight_msgs: 1000         # Limited in-flight
+window_bits: 2048           # 2× inflight_msgs
+commit_interval: 2s         # Very frequent commits
+commit_step: 50             # Small batches

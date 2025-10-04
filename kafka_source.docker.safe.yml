@@ -1,0 +1,14 @@
+schema_version: v1
+brokers: ["kafka:29092"]
+topics: ["event-tracking_track-events-approved"]
+group_id: "quanta-src-track-events-approved"
+start_from: "oldest"
+version: "3.6.0"
+commit_mode: "e2e"
+backpressure_strategy: "combined"
+checkpoint_strategy: "sliding_window"
+commit_strategy_type: "hybrid"
+tls_enabled: false
+sasl_user: ""
+sasl_pass: ""
+sarama_verbose: false

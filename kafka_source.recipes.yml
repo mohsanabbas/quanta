@@ -1,0 +1,291 @@
+# .....................................................................................
+# KAFKA SOURCE CONFIGURATION RECIPES
+# .....................................................................................
+# This file documents all available configuration options and common recipes
+# for different use cases.
+# .....................................................................................
+
+# .....................................................................................
+# RECIPE 1: High Throughput - Auto Commit (Fire and Forget)
+# .....................................................................................
+# Use when: Maximum throughput is a priority, some message loss acceptable
+# Trade-offs: No exactly-once guarantees, messages may be lost on crash
+# .....................................................................................
+
+schema_version: v1
+
+brokers:
+  - "kafka:29092"
+
+topics:
+  - "event-tracking_track-events-approved"
+
+group_id: "quanta-src-track-events-approved"
+
+# Start from the oldest for reprocessing, newest for real-time only
+start_from: "oldest"  # Options: "oldest" | "newest"
+
+# Kafka version for compatibility
+version: "3.6.0"
+
+# .....................................................................................
+# COMMIT MODE: Auto
+# - Offsets committed immediately after emitting to pipeline
+# - Does NOT wait for sink acknowledgment
+# - High throughput, low latency
+# - Risk: Messages can be lost if the app crashes before sink publishes
+# .....................................................................................
+commit_mode: "auto"
+
+# .....................................................................................
+# BACKPRESSURE STRATEGY
+# - Controls flow when downstream is slow
+# - Auto mode still uses backpressure to prevent memory overflow
+# .....................................................................................
+backpressure_strategy: "combined"  # Options: "count" | "size" | "combined"
+
+# .....................................................................................
+# CHECKPOINT STRATEGY
+# - Not really used in auto mode (no ack tracking)
+# - But still needed for consistency
+# .....................................................................................
+checkpoint_strategy: "sliding_window"  # Options: "sliding_window" | "application_controlled"
+
+# .....................................................................................
+# COMMIT STRATEGY
+# - Controls WHEN Kafka commits happening
+# - Auto mode uses Sarama's built-in commit logic
+# .....................................................................................
+commit_strategy_type: "periodic"  # Options: "ack_based" | "periodic" | "hybrid"
+
+# Security settings
+tls_enabled: false
+sasl_user: ""
+sasl_pass: ""
+
+# Verbose logging for debugging
+sarama_verbose: false
+
+
+# .....................................................................................
+# RECIPE 2: Reliable Processing - E2E Commit with Periodic Commits
+# .....................................................................................
+# Use when: At-least-once delivery required, can handle duplicates
+# Trade-offs: Lower throughput, higher memory usage
+# .....................................................................................
+
+# Uncomment to use this recipe:
+# schema_version: v1
+#
+# brokers:
+#   - "kafka:29092"
+#
+# topics:
+#   - "event-tracking_track-events-approved"
+#
+# group_id: "quanta-src-track-events-approved"
+# start_from: "oldest"
+# version: "3.6.0"
+#
+# # .....................................................................................
+# # COMMIT MODE: E2E (End-to-End)
+# # - Waits for sink acknowledgment before committing offset
+# # - Tracks all in-flight messages
+# # - Commits happen periodically (every 5s default)
+# # - Safe restarts with minimal replay
+# # .....................................................................................
+# commit_mode: "e2e"
+#
+# # .....................................................................................
+# # BACKPRESSURE: Combined (count + size limits)
+# # - Prevents memory overflow by limiting in-flight messages
+# # - Critical for E2E mode since messages held until ack
+# # .....................................................................................
+# backpressure_strategy: "combined"
+#
+# # .....................................................................................
+# # CHECKPOINT: Sliding Window
+# # - Tracks message acknowledgments efficiently
+# # - Handles out-of-order acks gracefully
+# # - Window size must be >= inflight_msgs
+# # .....................................................................................
+# checkpoint_strategy: "sliding_window"
+#
+# # .....................................................................................
+# # COMMIT STRATEGY: Hybrid (time-based + step-based)
+# # - Commits every 5 seconds OR every 128 messages (whichever comes first)
+# # - Ensures progress even with slow/out-of-order acks
+# # - Reduces replay window on restart
+# # .....................................................................................
+# commit_strategy_type: "hybrid"
+#
+# tls_enabled: false
+# sasl_user: ""
+# sasl_pass: ""
+# sarama_verbose: false
+
+
+# .....................................................................................
+# RECIPE 3: Maximum Safety - E2E with Aggressive Commits
+# .....................................................................................
+# Use when: Cannot tolerate any message loss, duplicates OK
+# Trade-offs: Lowest throughput, highest safety
+# .....................................................................................
+
+# Uncomment to use this recipe:
+# schema_version: v1
+#
+# brokers:
+#   - "kafka:29092"
+#
+# topics:
+#   - "event-tracking_track-events-approved"
+#
+# group_id: "quanta-src-track-events-approved"
+# start_from: "oldest"
+# version: "3.6.0"
+#
+# # E2E mode for at-least-once delivery
+# commit_mode: "e2e"
+#
+# # Combined backpressure with lower limits for faster feedback
+# backpressure_strategy: "combined"
+#
+# # Sliding window checkpoint for efficient ack tracking
+# checkpoint_strategy: "sliding_window"
+#
+# # Hybrid strategy with aggressive timing
+# commit_strategy_type: "hybrid"
+#
+# tls_enabled: false
+# sasl_user: ""
+# sasl_pass: ""
+# sarama_verbose: false
+
+
+# .....................................................................................
+# RECIPE 4: High Volume Batch Processing - E2E with Large Windows
+# .....................................................................................
+# Use when: Processing large volumes, can tolerate longer replay window
+# Trade-offs: Higher throughput, longer replay on restart
+# .....................................................................................
+
+# Uncomment to use this recipe:
+# schema_version: v1
+#
+# brokers:
+#   - "kafka:29092"
+#
+# topics:
+#   - "event-tracking_track-events-approved"
+#
+# group_id: "quanta-src-track-events-approved"
+# start_from: "newest"  # Real-time processing only
+# version: "3.6.0"
+#
+# # E2E for safety
+# commit_mode: "e2e"
+#
+# # Combined backpressure with large limits
+# backpressure_strategy: "combined"
+#
+# # Sliding window with large capacity
+# checkpoint_strategy: "sliding_window"
+#
+# # Periodic commits only (less frequent)
+# commit_strategy_type: "periodic"
+#
+# tls_enabled: false
+# sarl_user: ""
+# sasl_pass: ""
+# sarama_verbose: false
+
+
+# .....................................................................................
+# RECIPE 5: Development / Testing - Auto with Debug Logging
+# .....................................................................................
+# Use when: Local development, debugging issues
+# Trade-offs: Verbose logs, not for production
+# .....................................................................................
+
+# Uncomment to use this recipe:
+# schema_version: v1
+#
+# brokers:
+#   - "localhost:9094"  # Local Kafka
+#
+# topics:
+#   - "test-topic"
+#
+# group_id: "quanta-dev"
+# start_from: "oldest"
+# version: "3.6.0"
+#
+# # Auto mode for fast iteration
+# commit_mode: "auto"
+#
+# backpressure_strategy: "count"  # Simple count-based
+# checkpoint_strategy: "sliding_window"
+# commit_strategy_type: "periodic"
+#
+# tls_enabled: false
+# sasl_user: ""
+# sasl_pass: ""
+#
+# # Enable verbose Sarama logging for debugging
+# sarama_verbose: true
+
+
+# .....................................................................................
+# CONFIGURATION REFERENCE
+# .....................................................................................
+
+# schema_version: v1  # Always use v1
+
+# .....................................................................................
+# Required Fields
+# .....................................................................................
+# brokers: ["kafka:29092"]           # List of Kafka brokers
+# topics: ["topic1", "topic2"]       # Topics to consume
+# group_id: "consumer-group-id"      # Kafka consumer group ID
+# start_from: "oldest"               # "oldest" | "newest"
+# version: "3.6.0"                   # Kafka protocol version
+
+# .....................................................................................
+# Commit Mode (Critical Choice)
+# .....................................................................................
+# commit_mode: "auto"                # Fire-and-forget, high throughput
+# commit_mode: "e2e"                 # Wait for ack, at-least-once delivery
+
+# .....................................................................................
+# Backpressure Strategy
+# .....................................................................................
+# backpressure_strategy: "count" # Limit by message count only
+# backpressure_strategy: "size"      # Limit by byte size only
+# backpressure_strategy: "combined"  # Limit by both (recommended)
+
+# .....................................................................................
+# Checkpoint Strategy (E2E mode only)
+# .....................................................................................
+# checkpoint_strategy: "sliding_window"          # Efficient bitmap tracking
+# checkpoint_strategy: "application_controlled"  # Simple map-based tracking
+
+# .....................................................................................
+# Commit Strategy
+# .....................................................................................
+# commit_strategy_type: "ack_based"  # Commit every N messages
+# commit_strategy_type: "periodic"   # Commit every T seconds
+# commit_strategy_type: "hybrid"     # Commit every N messages OR T seconds
+
+# .....................................................................................
+# Security
+# .....................................................................................
+# tls_enabled: false                 # Enable TLS encryption
+# sasl_user: ""                      # SASL username (if needed)
+# sasl_pass: ""                      # SASL password (if needed)
+
+# .....................................................................................
+# Debugging
+# .....................................................................................
+# sarama_verbose: false              # Enable verbose Sarama library logs
+
