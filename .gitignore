@@ -9,6 +9,9 @@
 
 # Go build
 /bin/
+/engine
+/uppercase
+/cloudevents
 /*_test.go
 
 # Go modules

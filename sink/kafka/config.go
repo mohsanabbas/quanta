@@ -20,23 +20,23 @@ const (
 )
 
 type Config struct {
-	Brokers     []string `koanf:"brokers"`
-	Topic       string   `koanf:"topic"`
-	Version     string   `koanf:"version"`
-	TLSEn       bool     `koanf:"tls_enabled"`
-	SASLUser    string   `koanf:"sasl_user"`
-	SASLPass    string   `koanf:"sasl_pass"`
-	ClientID    string   `koanf:"client_id"`
-	Acks        string   `koanf:"acks"`
-	Compression string   `koanf:"compression"`
-	Idempotent  bool     `koanf:"idempotent"`
+	Brokers     []string `koanf:"brokers"          yaml:"brokers"`
+	Topic       string   `koanf:"topic"            yaml:"topic"`
+	Version     string   `koanf:"version"          yaml:"version"`
+	TLSEn       bool     `koanf:"tls_enabled"      yaml:"tls_enabled"`
+	SASLUser    string   `koanf:"sasl_user"        yaml:"sasl_user"`
+	SASLPass    string   `koanf:"sasl_pass"        yaml:"sasl_pass"`
+	ClientID    string   `koanf:"client_id"        yaml:"client_id"`
+	Acks        string   `koanf:"acks"             yaml:"acks"`
+	Compression string   `koanf:"compression"      yaml:"compression"`
+	Idempotent  bool     `koanf:"idempotent"       yaml:"idempotent"`
 
-	Timeout         time.Duration `koanf:"timeout"`
-	RetryMax        int           `koanf:"retry_max"`
-	RetryBackoffMin time.Duration `koanf:"retry_backoff_min"`
-	RetryBackoffMax time.Duration `koanf:"retry_backoff_max"`
+	Timeout         time.Duration `koanf:"timeout"           yaml:"timeout"`
+	RetryMax        int           `koanf:"retry_max"         yaml:"retry_max"`
+	RetryBackoffMin time.Duration `koanf:"retry_backoff_min" yaml:"retry_backoff_min"`
+	RetryBackoffMax time.Duration `koanf:"retry_backoff_max" yaml:"retry_backoff_max"`
 
-	HeaderTopicKey string `koanf:"header_topic_key"`
+	HeaderTopicKey string `koanf:"header_topic_key" yaml:"header_topic_key"`
 }
 
 func (c *Config) validateAndDefault() error {

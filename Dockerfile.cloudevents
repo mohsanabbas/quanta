@@ -1,0 +1,7 @@
+FROM scratch
+
+ARG BIN_DIR=bin/linux-amd64
+COPY ${BIN_DIR}/cloudevents /cloudevents
+
+EXPOSE 50052
+ENTRYPOINT ["/cloudevents","--listen=:50052"]

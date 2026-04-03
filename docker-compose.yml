@@ -48,11 +48,17 @@ services:
           --create --if-not-exists \
           --topic quanta-output \
           --partitions 3 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic quanta-dlq \
+          --partitions 3 --replication-factor 1
         echo '✅ Topics ready:'
         kafka-topics --bootstrap-server kafka:29092 --describe \
           --topic event-tracking_track-events-approved
         kafka-topics --bootstrap-server kafka:29092 --describe \
           --topic quanta-output
+        kafka-topics --bootstrap-server kafka:29092 --describe \
+          --topic quanta-dlq
     depends_on:
       kafka:
         condition: service_healthy
@@ -74,12 +80,28 @@ services:
     networks:
       - quanta-net
 
-  uppercase:
-    image: quanta-uppercase:local
-    container_name: quanta-uppercase
+  #  uppercase:
+  #    image: quanta-uppercase:local
+  #    container_name: quanta-uppercase
+  #    build:
+  #      context: .
+  #      dockerfile: Dockerfile.uppercase
+  #      args:
+  #        BIN_DIR: "bin/linux-${ARCH:-arm64}"
+  #    expose:
+  #      - "50052"
+  #    depends_on:
+  #      kafka-init:
+  #        condition: service_completed_successfully
+  #    networks:
+  #      - quanta-net
+
+  cloudevents:
+    image: quanta-cloudevents:local
+    container_name: quanta-cloudevents
     build:
       context: .
-      dockerfile: Dockerfile.uppercase
+      dockerfile: Dockerfile.cloudevents
       args:
         BIN_DIR: "bin/linux-${ARCH:-arm64}"
     expose:
@@ -113,7 +135,7 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      uppercase:
+      cloudevents:
         condition: service_started
     networks:
       - quanta-net

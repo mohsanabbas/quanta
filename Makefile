@@ -80,18 +80,21 @@ build-linux: proto
 	@mkdir -p $(BIN_DIR)
 	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -trimpath -ldflags='-s -w' -o $(BIN_DIR)/engine ./cmd/engine
 	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -trimpath -ldflags='-s -w' -o $(BIN_DIR)/uppercase ./examples/transformers/uppercase
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -trimpath -ldflags='-s -w' -o $(BIN_DIR)/cloudevents ./examples/transformers/cloudevents
 	@ls -lh $(BIN_DIR)
 
 # -------- docker images ------------------------------------------------------
 ENGINE_IMG := quanta-engine:local
 UPPER_IMG  := quanta-uppercase:local
+CE_IMG     := quanta-cloudevents:local
 
 .PHONY: docker-build docker-up docker-down docker-logs docker-smoke
 
 docker-build: build-linux
 	@echo "• Building Docker images (ARCH=$(ARCH))"
-	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.engine    -t $(ENGINE_IMG) .
-	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.uppercase -t $(UPPER_IMG) .
+	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.engine       -t $(ENGINE_IMG) .
+	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.uppercase    -t $(UPPER_IMG) .
+	@docker build --no-cache --build-arg BIN_DIR=bin/linux-$(ARCH) -f Dockerfile.cloudevents  -t $(CE_IMG) .
 
 # Requires Docker Desktop with Compose v2 (docker compose)
 docker-up: docker-down docker-build
@@ -115,6 +118,31 @@ docker-smoke:
 	@sleep 2
 	@curl -sf http://localhost:9100/metrics | head -n 5
 
+# Hot-reload a single transformer without losing Kafka data/offsets.
+# Usage: make docker-reload SVC=cloudevents
+SVC ?= cloudevents
+docker-reload:
+	@echo "• Rebuilding $(SVC) binary ($(ARCH))"
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -trimpath -ldflags='-s -w' \
+		-o bin/linux-$(ARCH)/$(SVC) ./examples/transformers/$(SVC)
+	@echo "• Recreating $(SVC) container"
+	@ARCH=$(ARCH) docker compose up -d --build --force-recreate $(SVC)
+	@echo "• Restarting engine"
+	@docker compose restart engine
+
+# Reprocess all source events: stop engine, reset offsets to earliest, restart.
+CONSUMER_GROUP ?= quanta-src-track-events-approved
+docker-reprocess:
+	@echo "• Stopping engine"
+	@docker compose stop engine
+	@echo "• Resetting consumer group $(CONSUMER_GROUP) to earliest"
+	@docker exec quanta-kafka kafka-consumer-groups --bootstrap-server kafka:29092 \
+		--group $(CONSUMER_GROUP) --reset-offsets --to-earliest \
+		--topic $(SEED_TOPIC) --execute
+	@echo "• Starting engine"
+	@docker compose start engine
+	@echo "✅ Reprocessing from offset 0"
+
 # -------- seed producer (local CLI) ------------------------------------------
 SEED_BROKERS ?= localhost:9094
 SEED_TOPIC   ?= event-tracking_track-events-approved
@@ -128,4 +156,4 @@ seed: proto
 		-count $(SEED_COUNT) \
 		-delay $(SEED_DELAY)
 
-.PHONY: proto tools build test vet lint lint-checkstyle lint-fix clean build-linux seed
+.PHONY: proto tools build test vet lint lint-checkstyle lint-fix clean build-linux seed docker-reload docker-reprocess

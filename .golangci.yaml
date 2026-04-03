@@ -19,6 +19,12 @@ issues:
         - mnd
         - gosec
         - gocritic
+    - path: examples/transformers/
+      linters:
+        - tagliatelle
+        - mnd
+        - gocritic
+        - dupl
 
 linters:
   enable:

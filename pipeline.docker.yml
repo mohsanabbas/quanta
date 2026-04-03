@@ -13,9 +13,11 @@ source:
 #  config: kafka_source.docker.safe.yml        # Maximum safety, frequent commits
 
 transformers:
-  - name: uppercase
+  - name: cloudevents
+  # - name: uppercase
     type: grpc
-    address: "uppercase:50052"
+    # address: "uppercase:50052"
+    address: "cloudevents:50052"
     max_in_flight: 100
     timeout_ms: 1000
     content_type: "application/protobuf"
@@ -37,6 +39,7 @@ sink_configs:
   kafka:
     brokers: ["kafka:29092"]
     topic: "quanta-output"
+    header_topic_key: "__topic"
     acks: "all"
     version: "3.6.0"
     client_id: "quanta-sink"
