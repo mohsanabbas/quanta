@@ -11,7 +11,6 @@ import (
 
 type logContextKey struct{}
 
-// WithLogAttrs attaches slog attributes to the context so downstream logs can include them.
 func WithLogAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 	if len(attrs) == 0 {
 		return ctx

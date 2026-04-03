@@ -24,6 +24,7 @@ func TestSlidingWindowCheckpointManagerAckReturnsHandle(t *testing.T) {
 	}
 
 	emptyHandle, base, adv := mgr.Ack(500)
+
 	if emptyHandle != (AckHandle{}) {
 		t.Fatalf("expected empty handle for unknown offset, got %+v", emptyHandle)
 	}

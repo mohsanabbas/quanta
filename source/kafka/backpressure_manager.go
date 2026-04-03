@@ -2,9 +2,14 @@ package kafka
 
 import (
 	"context"
-	"fmt"
+
+	qerr "quanta/internal/errors"
 
 	"golang.org/x/sync/semaphore"
+)
+
+const (
+	_defaultMaxMsgs = 1000
 )
 
 type CombinedBackpressureManager struct {
@@ -16,10 +21,10 @@ type CombinedBackpressureManager struct {
 
 func NewCombinedBackpressureManager(maxBytes int64, maxMsgs int64) *CombinedBackpressureManager {
 	if maxBytes <= 0 {
-		maxBytes = 1024 * 1024 * 100 // 100MB default
+		maxBytes = _defaultMaxBytes
 	}
 	if maxMsgs <= 0 {
-		maxMsgs = 1000
+		maxMsgs = _defaultMaxMsgs
 	}
 	return &CombinedBackpressureManager{
 		byteSem:  semaphore.NewWeighted(maxBytes),
@@ -33,14 +38,14 @@ func (b *CombinedBackpressureManager) Acquire(ctx context.Context, size int64) e
 	if size <= 0 {
 		size = 1
 	}
-	// First acquire byte token
+
 	if err := b.byteSem.Acquire(ctx, size); err != nil {
-		return fmt.Errorf("acquire byte token: %w", err)
+		return qerr.Source("kafka", "backpressure", err)
 	}
-	// Then acquire a message token
+
 	if err := b.msgSem.Acquire(ctx, 1); err != nil {
 		b.byteSem.Release(size)
-		return fmt.Errorf("acquire message token: %w", err)
+		return qerr.Source("kafka", "backpressure", err)
 	}
 	return nil
 }
@@ -72,11 +77,11 @@ func NewCountBasedBackpressureManager(maxCount int64) *CountBasedBackpressureMan
 	}
 }
 
-func (b *CountBasedBackpressureManager) Acquire(ctx context.Context, size int64) error {
+func (b *CountBasedBackpressureManager) Acquire(ctx context.Context, _ int64) error {
 	return b.sem.Acquire(ctx, 1)
 }
 
-func (b *CountBasedBackpressureManager) Release(size int64) {
+func (b *CountBasedBackpressureManager) Release(_ int64) {
 	b.sem.Release(1)
 }
 
@@ -91,7 +96,7 @@ type SizeBasedBackpressureManager struct {
 
 func NewSizeBasedBackpressureManager(maxBytes int64) *SizeBasedBackpressureManager {
 	if maxBytes <= 0 {
-		maxBytes = 1024 * 1024 * 100 // 100MB default
+		maxBytes = _defaultMaxBytes
 	}
 	return &SizeBasedBackpressureManager{
 		sem:      semaphore.NewWeighted(maxBytes),

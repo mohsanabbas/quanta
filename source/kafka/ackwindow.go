@@ -1,12 +1,17 @@
 package kafka
 
 import (
+	"math"
 	"math/bits"
 	"sync"
 	"sync/atomic"
 )
 
-const InvalidSlot = ^uint32(0)
+const (
+	InvalidSlot = ^uint32(0)
+
+	_bitsPerWord = 64
+)
 
 type PartitionTracker struct {
 	mu          sync.Mutex
@@ -20,7 +25,7 @@ func NewPartitionTracker(windowBits uint32) *PartitionTracker {
 	if windowBits == 0 {
 		windowBits = 4096
 	}
-	words := int((windowBits + 63) / 64)
+	words := int((windowBits + _bitsPerWord - 1) / _bitsPerWord)
 	return &PartitionTracker{
 		base:   -1,
 		window: make([]uint64, words),
@@ -54,7 +59,7 @@ func (p *PartitionTracker) Reserve(offset int64) uint32 {
 	}
 	base := atomic.LoadInt64(&p.base)
 	delta := offset - base
-	if delta < 0 {
+	if delta < 0 || delta > math.MaxUint32 {
 		return InvalidSlot
 	}
 	slot := uint32(delta)
@@ -75,12 +80,12 @@ func (p *PartitionTracker) AckOffset(offset int64) (int64, bool) {
 		return base, false
 	}
 	delta := offset - base
-	if delta >= int64(p.size) {
+	if delta >= int64(p.size) || delta < 0 {
 		return base, false
 	}
-	slot := uint32(delta)
-	word := slot / 64
-	bit := slot % 64
+	slot := uint32(delta) //nolint:gosec // bounds-checked above: 0 <= delta < p.size (uint32)
+	word := slot / _bitsPerWord
+	bit := slot % _bitsPerWord
 
 	oldWord := p.window[word]
 	mask := uint64(1) << bit
@@ -118,16 +123,16 @@ func (p *PartitionTracker) advanceLocked(current int64) (int64, bool) {
 			return base, advanced
 		}
 		advanced = true
-		shift := uint(run)
+		shift := uint(run) //nolint:gosec // run is 0..64 from TrailingZeros64
 		var carry uint64
 		for i := len(p.window) - 1; i >= 0; i-- {
-			next := p.window[i] << (64 - shift)
+			next := p.window[i] << (_bitsPerWord - shift)
 			p.window[i] = (p.window[i] >> shift) | carry
 			carry = next
 			if i == 0 {
 				break
 			}
 		}
-		base += int64(shift)
+		base += int64(shift) //nolint:gosec // shift is 0..64, fits int64
 	}
 }

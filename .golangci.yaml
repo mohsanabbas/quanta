@@ -5,6 +5,21 @@ run:
   issues-exit-code: 1
   tests: false
 
+issues:
+  exclude-dirs:
+    - api/proto
+    - scripts
+  exclude-rules:
+    - path: internal/telemetry/
+      linters:
+        - contextcheck
+    - path: cmd/seed/
+      linters:
+        - tagliatelle
+        - mnd
+        - gosec
+        - gocritic
+
 linters:
   enable:
     - errcheck
@@ -44,6 +59,28 @@ linters:
     - wrapcheck
 
 linters-settings:
+  mnd:
+    ignored-numbers:
+      - "0"
+      - "1"
+      - "2"
+      - "10"
+    ignored-functions:
+      - "make"
+      - "os.Exit"
+      - "strconv.*"
+      - "time.Duration"
+      - "context.WithTimeout"
+      - "slog.NewRecord"
+    ignored-files:
+      - "_test.go"
+  gocyclo:
+    min-complexity: 20
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  exhaustive:
+    default-signifies-exhaustive: true
   tagliatelle:
     case:
       rules:

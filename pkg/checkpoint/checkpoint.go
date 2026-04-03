@@ -66,7 +66,6 @@ func (u *Uncapped[T]) Highest() *T {
 	return u.cpPay
 }
 
-// Capped - Bounded checkpoint tracker with thread safety
 type Capped[T any] struct {
 	u    *Uncapped[T]
 	cap  int64
@@ -111,7 +110,6 @@ func (c *Capped[T]) Highest() *T {
 	return c.u.Highest()
 }
 
-// Manager - Checkpoint manager with commit timing
 type Manager[T any] struct {
 	capped        *Capped[T]
 	commitEveryNS int64

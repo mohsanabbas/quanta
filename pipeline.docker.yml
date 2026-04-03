@@ -24,11 +24,16 @@ transformers:
       backoff_ms: 200
 
 sinks:
-#  - stdout
+  - stdout
   - kafka
 
 sink_configs:
-#  stdout: {}       # Uncomment for debugging
+  stdout:
+    print_counter: true
+    print_value: true
+    value_max_bytes: 200
+    ack_batch_size: 100
+    ack_flush_ms: 500
   kafka:
     brokers: ["kafka:29092"]
     topic: "quanta-output"

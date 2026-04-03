@@ -6,7 +6,6 @@ func TestPartitionTrackerAdvance(t *testing.T) {
 	tracker := NewPartitionTracker(8)
 	tracker.Reset(100)
 
-	// Reserve offsets 100,101,102
 	tracker.Reserve(100)
 	tracker.Reserve(101)
 	tracker.Reserve(102)

@@ -19,64 +19,64 @@ import (
 
 type rawEvent struct {
 	Properties struct {
-		CorrelationID      string `json:"correlation_id"`
-		CardHash           string `json:"card_hash"`
-		CardBIN            string `json:"card_bin"`
-		CardLastFour       string `json:"card_last_four"`
-		CardExpirationDate string `json:"card_expiration_date"`
-		Status             string `json:"status"`
-		DeviceAppVersion   string `json:"device_app_version"`
-		Origin             string `json:"origin"`
-		DeviceID           string `json:"device_id"`
-		DeviceOS           string `json:"device_os"`
-		DeviceModel        string `json:"device_model"`
-		DeviceSessionID    string `json:"device_session_id"`
-		IsThirdParty       bool   `json:"is_third_party"`
+		RequestID    string  `json:"request_id"`
+		Provider     string  `json:"provider"`
+		Model        string  `json:"model"`
+		Status       string  `json:"status"`
+		InputTokens  int     `json:"input_tokens"`
+		OutputTokens int     `json:"output_tokens"`
+		LatencyMs    int     `json:"latency_ms"`
+		Temperature  float64 `json:"temperature"`
+		MaxTokens    int     `json:"max_tokens"`
+		Stream       bool    `json:"stream"`
+		FinishReason string  `json:"finish_reason"`
+		Origin       string  `json:"origin"`
 	} `json:"properties"`
 	Context struct {
 		EventContractID string `json:"event_contract_id"`
 		Event           string `json:"event"`
 		AppName         string `json:"app_name"`
 		AppVersion      string `json:"app_version"`
-		AppType         string `json:"app_type"`
 		CreatedAt       string `json:"created_at"`
 		UserID          string `json:"user_id"`
-		UserType        string `json:"user_type"`
+		OrgID           string `json:"org_id"`
+		Environment     string `json:"environment"`
 	} `json:"context"`
-	Custom any `json:"custom"`
 }
 
 type normalizedEvent struct {
-	EventID       string    `json:"event_id"`
-	EventName     string    `json:"event_name"`
-	EventStatus   string    `json:"event_status"`
-	StatusClass   string    `json:"status_class"`
-	Origin        string    `json:"origin"`
-	OccurredAt    time.Time `json:"occurred_at"`
-	CorrelationID string    `json:"correlation_id"`
-	Device        device    `json:"device"`
-	User          user      `json:"user"`
-	Card          card      `json:"card"`
+	EventID     string    `json:"event_id"`
+	EventName   string    `json:"event_name"`
+	Provider    string    `json:"provider"`
+	Model       string    `json:"model"`
+	Status      string    `json:"status"`
+	StatusClass string    `json:"status_class"`
+	Origin      string    `json:"origin"`
+	OccurredAt  time.Time `json:"occurred_at"`
+	RequestID   string    `json:"request_id"`
+	Usage       usage     `json:"usage"`
+	Params      params    `json:"params"`
+	User        user      `json:"user"`
+	Environment string    `json:"environment"`
 }
 
-type device struct {
-	ID         string `json:"id"`
-	Model      string `json:"model"`
-	OS         string `json:"os"`
-	AppVersion string `json:"app_version"`
-	SessionID  string `json:"session_id"`
+type usage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	LatencyMs    int `json:"latency_ms"`
+}
+
+type params struct {
+	Temperature  float64 `json:"temperature"`
+	MaxTokens    int     `json:"max_tokens"`
+	Stream       bool    `json:"stream"`
+	FinishReason string  `json:"finish_reason"`
 }
 
 type user struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-}
-
-type card struct {
-	BIN        string `json:"bin"`
-	LastFour   string `json:"last_four"`
-	Expiration string `json:"expiration"`
-	Hash       string `json:"hash"`
+	ID    string `json:"id"`
+	OrgID string `json:"org_id"`
 }
 
 type transformerServer struct {
@@ -85,8 +85,8 @@ type transformerServer struct {
 
 func (s *transformerServer) Metadata(context.Context, *pb.MetadataRequest) (*pb.MetadataResponse, error) {
 	return &pb.MetadataResponse{
-		Name:            "card-registration-normalizer",
-		Version:         "1.1.0",
+		Name:            "ai-event-normalizer",
+		Version:         "2.0.0",
 		ProtocolVersion: &pb.PluginVersion{Major: 1, Minor: 0, Patch: 0},
 		Capabilities:    map[string]string{"batch": "false"},
 	}, nil
@@ -108,7 +108,7 @@ func (s *transformerServer) Transform(ctx context.Context, req *pb.TransformRequ
 
 	key := in.Context.EventContractID
 	if key == "" {
-		key = in.Properties.CorrelationID
+		key = in.Properties.RequestID
 	}
 
 	occurredAt, err := time.Parse(time.RFC3339, in.Context.CreatedAt)
@@ -117,34 +117,37 @@ func (s *transformerServer) Transform(ctx context.Context, req *pb.TransformRequ
 	}
 
 	statusUpper := strings.ToUpper(in.Properties.Status)
+	providerUpper := strings.ToUpper(in.Properties.Provider)
 	eventName := strings.ToLower(in.Context.Event)
 	statusClass := classifyStatus(statusUpper)
 
 	norm := normalizedEvent{
-		EventID:       key,
-		EventName:     eventName,
-		EventStatus:   statusUpper,
-		StatusClass:   statusClass,
-		Origin:        in.Properties.Origin,
-		OccurredAt:    occurredAt,
-		CorrelationID: in.Properties.CorrelationID,
-		Device: device{
-			ID:         in.Properties.DeviceID,
-			Model:      in.Properties.DeviceModel,
-			OS:         strings.ToUpper(in.Properties.DeviceOS),
-			AppVersion: in.Properties.DeviceAppVersion,
-			SessionID:  in.Properties.DeviceSessionID,
+		EventID:     key,
+		EventName:   eventName,
+		Provider:    providerUpper,
+		Model:       in.Properties.Model,
+		Status:      statusUpper,
+		StatusClass: statusClass,
+		Origin:      in.Properties.Origin,
+		OccurredAt:  occurredAt,
+		RequestID:   in.Properties.RequestID,
+		Usage: usage{
+			InputTokens:  in.Properties.InputTokens,
+			OutputTokens: in.Properties.OutputTokens,
+			TotalTokens:  in.Properties.InputTokens + in.Properties.OutputTokens,
+			LatencyMs:    in.Properties.LatencyMs,
+		},
+		Params: params{
+			Temperature:  in.Properties.Temperature,
+			MaxTokens:    in.Properties.MaxTokens,
+			Stream:       in.Properties.Stream,
+			FinishReason: strings.ToUpper(in.Properties.FinishReason),
 		},
 		User: user{
-			ID:   in.Context.UserID,
-			Type: in.Context.UserType,
+			ID:    in.Context.UserID,
+			OrgID: in.Context.OrgID,
 		},
-		Card: card{
-			BIN:        in.Properties.CardBIN,
-			LastFour:   in.Properties.CardLastFour,
-			Expiration: in.Properties.CardExpirationDate,
-			Hash:       in.Properties.CardHash,
-		},
+		Environment: strings.ToUpper(in.Context.Environment),
 	}
 
 	payload, err := json.Marshal(norm)
@@ -154,7 +157,8 @@ func (s *transformerServer) Transform(ctx context.Context, req *pb.TransformRequ
 
 	headers := map[string]string{
 		"event-name":   norm.EventName,
-		"status":       norm.EventStatus,
+		"provider":     norm.Provider,
+		"status":       norm.Status,
 		"status-class": norm.StatusClass,
 	}
 
@@ -171,13 +175,17 @@ func (s *transformerServer) Transform(ctx context.Context, req *pb.TransformRequ
 }
 
 func classifyStatus(status string) string {
-	switch {
-	case strings.Contains(status, "APPROV"), strings.Contains(status, "UNRESTRICT"):
-		return "approved"
-	case strings.Contains(status, "REJECT"):
-		return "rejected"
-	case strings.Contains(status, "PEND"):
-		return "pending"
+	switch status {
+	case "SUCCESS":
+		return "success"
+	case "ERROR":
+		return "error"
+	case "RATE_LIMITED":
+		return "throttled"
+	case "TIMEOUT":
+		return "error"
+	case "CONTENT_FILTERED":
+		return "filtered"
 	default:
 		return "unknown"
 	}

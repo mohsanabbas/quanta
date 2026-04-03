@@ -11,31 +11,29 @@ import (
 func TestTransformerProducesNormalizedEvent(t *testing.T) {
 	raw := `{
         "properties": {
-            "correlation_id": "0c710a15-54c6-4718-b1ac-76e3b60acba7",
-            "card_hash": "510bb235d416da4befb36b62b1b69695fbad86a8",
-            "card_bin": "511684",
-            "card_last_four": "9255",
-            "card_expiration_date": "12/2027",
-            "status": "UNRESTRICTED",
-            "device_app_version": "11.0.142",
-            "origin": "new_wallet",
-            "device_id": "fa0222c1-d91e-47f7-b94f-e522ff5ad12c",
-            "device_os": "android",
-            "device_model": "galaxy",
-            "device_session_id": "35ebb255-902a-427c-8f31-6b8c5fbe7025",
-            "is_third_party": true
+            "request_id": "req-000001-abc123",
+            "provider": "anthropic",
+            "model": "claude-opus-4",
+            "status": "success",
+            "input_tokens": 1500,
+            "output_tokens": 800,
+            "latency_ms": 2300,
+            "temperature": 0.7,
+            "max_tokens": 4096,
+            "stream": true,
+            "finish_reason": "stop",
+            "origin": "api"
         },
         "context": {
-            "event_contract_id": "8996213a-5800-4e28-966e-a07c097c36b6",
-            "event": "request_card_registration_status_changed",
-            "app_name": "ms-credit-cards-registration",
-            "app_version": "7c4d9e6591781e954689ee0069f4856bfc86cc28",
-            "app_type": "BACKEND",
-            "created_at": "2024-11-12T09:37:05-03:00",
-            "user_id": "26232789",
-            "user_type": "CONSUMER"
-        },
-        "custom": null
+            "event_contract_id": "evt-000001-def456",
+            "event": "chat_completion",
+            "app_name": "quanta-ai-gateway",
+            "app_version": "2.4.0",
+            "created_at": "2026-04-03T12:00:00Z",
+            "user_id": "usr-042000",
+            "org_id": "org-acme",
+            "environment": "production"
+        }
     }`
 
 	srv := &transformerServer{}
@@ -55,13 +53,16 @@ func TestTransformerProducesNormalizedEvent(t *testing.T) {
 		t.Fatalf("metadata missing")
 	}
 
-	if got := ev.Metadata.GetAttributes()["sink.key"]; got != "8996213a-5800-4e28-966e-a07c097c36b6" {
+	if got := ev.Metadata.GetAttributes()["sink.key"]; got != "evt-000001-def456" {
 		t.Fatalf("unexpected sink.key: %q", got)
 	}
-	if got := ev.Metadata.GetHeaders()["status"]; got != "UNRESTRICTED" {
+	if got := ev.Metadata.GetHeaders()["provider"]; got != "ANTHROPIC" {
+		t.Fatalf("unexpected provider header: %q", got)
+	}
+	if got := ev.Metadata.GetHeaders()["status"]; got != "SUCCESS" {
 		t.Fatalf("unexpected status header: %q", got)
 	}
-	if got := ev.Metadata.GetHeaders()["status-class"]; got != "approved" {
+	if got := ev.Metadata.GetHeaders()["status-class"]; got != "success" {
 		t.Fatalf("unexpected status-class header: %q", got)
 	}
 
@@ -69,13 +70,22 @@ func TestTransformerProducesNormalizedEvent(t *testing.T) {
 	if err := json.Unmarshal(ev.GetValue(), &out); err != nil {
 		t.Fatalf("failed to decode normalized payload: %v", err)
 	}
-	if out.EventID != "8996213a-5800-4e28-966e-a07c097c36b6" {
+	if out.EventID != "evt-000001-def456" {
 		t.Fatalf("unexpected event_id: %s", out.EventID)
 	}
-	if out.Device.OS != "ANDROID" {
-		t.Fatalf("device os normalization failed: %s", out.Device.OS)
+	if out.Provider != "ANTHROPIC" {
+		t.Fatalf("provider not uppercased: %s", out.Provider)
 	}
-	if out.Card.BIN != "511684" || out.Card.LastFour != "9255" {
-		t.Fatalf("card fields not carried forward: %+v", out.Card)
+	if out.Model != "claude-opus-4" {
+		t.Fatalf("unexpected model: %s", out.Model)
+	}
+	if out.Usage.TotalTokens != 2300 {
+		t.Fatalf("total tokens not computed: %d", out.Usage.TotalTokens)
+	}
+	if out.Environment != "PRODUCTION" {
+		t.Fatalf("environment not uppercased: %s", out.Environment)
+	}
+	if out.Params.FinishReason != "STOP" {
+		t.Fatalf("finish_reason not uppercased: %s", out.Params.FinishReason)
 	}
 }

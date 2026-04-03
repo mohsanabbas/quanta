@@ -7,6 +7,8 @@ import (
 	"time"
 
 	pb "quanta/api/proto/v1"
+	qerr "quanta/internal/errors"
+	"quanta/sink"
 
 	"github.com/IBM/sarama"
 )
@@ -17,10 +19,11 @@ type SaramaSink struct {
 	doneCh chan struct{}
 }
 
+var _ sink.Adapter = (*SaramaSink)(nil)
+
 type delivery struct{ ch chan error }
 
 func (s *SaramaSink) Configure(_ context.Context, raw any) error {
-	// accept both Config and *Config
 	var cfg Config
 	switch v := raw.(type) {
 	case Config:
@@ -30,16 +33,32 @@ func (s *SaramaSink) Configure(_ context.Context, raw any) error {
 			cfg = *v
 		}
 	default:
-		return errors.New("kafka-sink: invalid config type")
+		return qerr.Sink("kafka", "configure", errors.New("invalid config type"))
 	}
 	if err := cfg.validateAndDefault(); err != nil {
 		return err
 	}
 	s.cfg = cfg
 
-	ver, err := sarama.ParseKafkaVersion(cfg.Version)
+	sc, err := buildSaramaConfig(cfg)
 	if err != nil {
 		return err
+	}
+
+	prod, err := sarama.NewAsyncProducer(cfg.Brokers, sc)
+	if err != nil {
+		return qerr.Sink("kafka", "connect", err)
+	}
+	s.prod = prod
+	s.doneCh = make(chan struct{})
+	go s.pump()
+	return nil
+}
+
+func buildSaramaConfig(cfg Config) (*sarama.Config, error) {
+	ver, err := sarama.ParseKafkaVersion(cfg.Version)
+	if err != nil {
+		return nil, qerr.Config("kafka-sink", "parse-version", err)
 	}
 	sc := sarama.NewConfig()
 	sc.Version = ver
@@ -50,11 +69,11 @@ func (s *SaramaSink) Configure(_ context.Context, raw any) error {
 	sc.Producer.Return.Errors = true
 
 	switch cfg.Acks {
-	case "none":
+	case _acksNone:
 		sc.Producer.RequiredAcks = sarama.NoResponse
-	case "local":
+	case _acksLocal:
 		sc.Producer.RequiredAcks = sarama.WaitForLocal
-	case "all":
+	case _acksAll:
 		sc.Producer.RequiredAcks = sarama.WaitForAll
 	}
 
@@ -95,19 +114,12 @@ func (s *SaramaSink) Configure(_ context.Context, raw any) error {
 		sc.Net.SASL.Password = cfg.SASLPass
 	}
 
-	prod, err := sarama.NewAsyncProducer(cfg.Brokers, sc)
-	if err != nil {
-		return err
-	}
-	s.prod = prod
-	s.doneCh = make(chan struct{})
-	go s.pump()
-	return nil
+	return sc, nil
 }
 
 func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 	if s.prod == nil {
-		return errors.New("kafka sink not configured")
+		return qerr.Sink("kafka", "publish", errors.New("not configured"))
 	}
 	topic := s.cfg.Topic
 	if s.cfg.HeaderTopicKey != "" && f.Headers != nil {
@@ -116,7 +128,7 @@ func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 		}
 	}
 	if topic == "" {
-		return errors.New("kafka sink: no topic resolved")
+		return qerr.Sink("kafka", "publish", errors.New("no topic resolved"))
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
@@ -237,7 +249,6 @@ func toRecordHeaders(h map[string][]byte) []sarama.RecordHeader {
 	}
 	out := make([]sarama.RecordHeader, 0, len(h))
 	for k, v := range h {
-		// sarama wants []byte we already have it
 		out = append(out, sarama.RecordHeader{Key: []byte(k), Value: v})
 	}
 	return out

@@ -1,29 +1,61 @@
-version: '3.9'
-
 services:
   kafka:
-    image: bitnami/kafka:3.7.0
+    image: confluentinc/cp-kafka:7.9.0
     container_name: quanta-kafka
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "kafka-topics --bootstrap-server kafka:29092 --list || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     environment:
-      - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_NODE_ID=1
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://0.0.0.0:29092,EXTERNAL://0.0.0.0:9094,CONTROLLER://0.0.0.0:9093
-      # - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,EXTERNAL://host.docker.internal:9094
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,EXTERNAL://localhost:9094
-      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data
-      - ALLOW_PLAINTEXT_LISTENER=yes
-  
+      # KRaft mode — no ZooKeeper
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://0.0.0.0:9094,CONTROLLER://kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     ports:
       - "9094:9094"
     volumes:
-      - kafka_data:/bitnami/kafka
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - quanta-net
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.9.0
+    container_name: quanta-kafka-init
+    entrypoint: [ "/bin/bash", "-c" ]
+    command:
+      - |
+        echo '⏳ Creating Kafka topics...'
+        kafka-topics --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic event-tracking_track-events-approved \
+          --partitions 3 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic quanta-output \
+          --partitions 3 --replication-factor 1
+        echo '✅ Topics ready:'
+        kafka-topics --bootstrap-server kafka:29092 --describe \
+          --topic event-tracking_track-events-approved
+        kafka-topics --bootstrap-server kafka:29092 --describe \
+          --topic quanta-output
+    depends_on:
+      kafka:
+        condition: service_healthy
     networks:
       - quanta-net
 
@@ -33,11 +65,12 @@ services:
     restart: unless-stopped
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: PLAINTEXT://kafka:29092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
     ports:
       - "8080:8080"
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     networks:
       - quanta-net
 
@@ -48,11 +81,12 @@ services:
       context: .
       dockerfile: Dockerfile.uppercase
       args:
-        BIN_DIR: "bin/linux-${ARCH:-amd64}"
+        BIN_DIR: "bin/linux-${ARCH:-arm64}"
     expose:
       - "50052"
     depends_on:
-      - kafka
+      kafka-init:
+        condition: service_completed_successfully
     networks:
       - quanta-net
 
@@ -63,7 +97,7 @@ services:
       context: .
       dockerfile: Dockerfile.engine
       args:
-        BIN_DIR: "bin/linux-${ARCH:-amd64}"
+        BIN_DIR: "bin/linux-${ARCH:-arm64}"
     environment:
       - QUANTA_PIPELINE_YML=/config/pipeline.docker.yml
     volumes:
@@ -77,8 +111,10 @@ services:
     ports:
       - "9100:9100"
     depends_on:
-      - kafka
-      - uppercase
+      kafka-init:
+        condition: service_completed_successfully
+      uppercase:
+        condition: service_started
     networks:
       - quanta-net
 

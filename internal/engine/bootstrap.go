@@ -2,7 +2,8 @@ package engine
 
 import (
 	"context"
-	"fmt"
+
+	qerr "quanta/internal/errors"
 	"quanta/internal/pipeline"
 	"quanta/internal/telemetry"
 	"quanta/internal/transport"
@@ -11,21 +12,21 @@ import (
 func Bootstrap(ctx context.Context, cfg Config) (*Engine, error) {
 	srv, err := transport.StartServer(cfg.GRPCPort)
 	if err != nil {
-		return nil, fmt.Errorf("transport: %w", err)
+		return nil, qerr.Transport("grpc", "start", err)
 	}
 
 	var runner *pipeline.Runner
 	if cfg.PipelineYml != "" {
 		runner, err = pipeline.Compile(ctx, cfg.PipelineYml)
 		if err != nil {
-			return nil, fmt.Errorf("pipeline: %w", err)
+			return nil, qerr.Pipeline("compile", err)
 		}
 		if err := runner.Start(ctx); err != nil {
-			return nil, err
+			return nil, qerr.Pipeline("start", err)
 		}
 	}
 
-	telemetry.Expose(cfg.MetricsPort)
+	telemetry.Expose(ctx, cfg.MetricsPort)
 
 	return &Engine{
 		transport: srv,

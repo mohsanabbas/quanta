@@ -91,7 +91,7 @@ func NewPeriodicCommitStrategy(
 	logger *slog.Logger,
 ) *PeriodicCommitStrategy {
 	if interval <= 0 {
-		interval = 5 * time.Second
+		interval = _defaultCommitInterval
 	}
 	return &PeriodicCommitStrategy{
 		interval:   interval,
@@ -158,10 +158,10 @@ func NewHybridCommitStrategy(
 	logger *slog.Logger,
 ) *HybridCommitStrategy {
 	if step <= 0 {
-		step = 100
+		step = _defaultCommitStep
 	}
 	if interval <= 0 {
-		interval = 5 * time.Second
+		interval = _defaultCommitInterval
 	}
 	return &HybridCommitStrategy{
 		step:       step,

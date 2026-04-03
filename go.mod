@@ -1,6 +1,6 @@
 module quanta
 
-go 1.25
+go 1.26
 
 require (
 	github.com/IBM/sarama v1.46.1
@@ -9,6 +9,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.0
 	github.com/knadh/koanf/v2 v2.3.0
 	github.com/prometheus/client_golang v1.23.2
+	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel/trace v1.38.0
 	golang.org/x/sync v0.17.0
 	google.golang.org/grpc v1.75.1
@@ -180,7 +181,6 @@ require (
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/subosito/gotenv v1.4.1 // indirect
 	github.com/tdakkota/asciicheck v0.4.1 // indirect
 	github.com/tetafro/godot v1.5.0 // indirect

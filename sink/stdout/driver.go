@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "quanta/api/proto/v1"
+	qerr "quanta/internal/errors"
 	"quanta/internal/logging"
 	"quanta/sink"
 )
@@ -31,18 +32,22 @@ type driver struct {
 	timer   *time.Timer
 }
 
+var (
+	_ sink.Adapter  = (*driver)(nil)
+	_ sink.AckAware = (*driver)(nil)
+)
+
 var seq uint64
 
 func (d *driver) Configure(_ context.Context, raw any) error {
 	cfg, ok := raw.(Config)
 	if !ok {
-		// also accept a pointer to Config
 		if p, ok2 := raw.(*Config); ok2 && p != nil {
 			cfg = *p
 		} else {
 			got := reflect.TypeOf(raw).String()
 			logging.L().With("component", "sink.stdout").Error("invalid config type", "got", got)
-			return errors.New("stdout-sink: invalid config type")
+			return qerr.Sink("stdout", "configure", errors.New("invalid config type"))
 		}
 	}
 	if cfg.ValueMaxBytes <= 0 {

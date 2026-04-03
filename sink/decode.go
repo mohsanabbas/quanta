@@ -1,40 +1,41 @@
 package sink
 
 import (
-	"fmt"
+	"errors"
 	"os"
+
+	qerr "quanta/internal/errors"
 
 	"gopkg.in/yaml.v3"
 )
 
-// DecodeYAML decodes either an inline YAML map (any) or a string path into out.
 func DecodeYAML(in any, out any) error {
 	if in == nil {
-		return fmt.Errorf("missing config")
+		return qerr.Config("", "decode", errors.New("missing config"))
 	}
 	switch v := in.(type) {
 	case string:
 		b, err := os.ReadFile(v)
 		if err != nil {
-			return fmt.Errorf("read %q: %w", v, err)
+			return qerr.Config("", "read", err)
 		}
 		if err := yaml.Unmarshal(b, out); err != nil {
-			return fmt.Errorf("parse %q: %w", v, err)
+			return qerr.Config("", "parse", err)
 		}
 		return nil
 	case *yaml.Node:
 		if v == nil {
-			return fmt.Errorf("missing config")
+			return qerr.Config("", "decode", errors.New("missing config"))
 		}
 		raw, err := yaml.Marshal(v)
 		if err != nil {
-			return err
+			return qerr.Config("", "marshal", err)
 		}
 		return yaml.Unmarshal(raw, out)
 	default:
-		raw, err := yaml.Marshal(in)
+		raw, err := yaml.Marshal(v)
 		if err != nil {
-			return err
+			return qerr.Config("", "marshal", err)
 		}
 		return yaml.Unmarshal(raw, out)
 	}

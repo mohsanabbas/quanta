@@ -1,0 +1,370 @@
+<mxfile host="65bd71144e">
+    <diagram id="current" name="1. Current Architecture (Problems)">
+        <mxGraphModel dx="494" dy="696" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="t1" value="&lt;b&gt;CURRENT ARCHITECTURE — PROBLEMS&lt;/b&gt;" style="text;html=1;fontSize=20;fontColor=#FF0000;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="20" width="500" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="kafka" value="&lt;b&gt;Kafka Brokers&lt;/b&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="120" width="160" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="engine" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;dashPattern=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="320" y="80" width="900" height="500" as="geometry"/>
+                </mxCell>
+                <mxCell id="engine_label" value="&lt;b&gt;QUANTA ENGINE (single process)&lt;/b&gt;" style="text;html=1;fontSize=16;fontColor=#333333;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="85" width="350" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="src" value="&lt;b&gt;Kafka Source&lt;/b&gt;&lt;br&gt;(Sarama Driver)&lt;br&gt;&lt;br&gt;✅ Backpressure&lt;br&gt;✅ Checkpoint&lt;br&gt;✅ Commit Strategy&lt;br&gt;✅ Sliding Window" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="340" y="140" width="180" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="runner" value="&lt;b&gt;Pipeline Runner&lt;/b&gt;&lt;br&gt;&lt;br&gt;❌ Unary RPC only&lt;br&gt;❌ No streaming&lt;br&gt;❌ Sequential stages&lt;br&gt;❌ No DLQ&lt;br&gt;❌ No per-stage metrics&lt;br&gt;❌ Sink failure = fatal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="140" width="200" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="ts1" value="&lt;b&gt;Transform Stage&lt;/b&gt;&lt;br&gt;(gRPC Unary)&lt;br&gt;&lt;br&gt;❌ No connection pool&lt;br&gt;❌ No streaming RPC&lt;br&gt;❌ Hardcoded retry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="850" y="130" width="180" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="ts2" value="&lt;b&gt;Transform Stage N&lt;/b&gt;&lt;br&gt;(gRPC Unary)&lt;br&gt;&lt;br&gt;❌ Same problems" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="850" y="270" width="180" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="sink_stdout" value="&lt;b&gt;Stdout Sink&lt;/b&gt;&lt;br&gt;(debug only)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="380" width="140" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="sink_kafka" value="&lt;b&gt;Kafka Sink&lt;/b&gt;&lt;br&gt;(async producer)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="380" width="140" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="grpc" value="&lt;b&gt;gRPC Server&lt;/b&gt;&lt;br&gt;(:7070)&lt;br&gt;&lt;br&gt;❌ Control stubs only&lt;br&gt;❌ Health not registered&lt;br&gt;❌ Connector unused" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="470" width="200" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="metrics" value="&lt;b&gt;Metrics&lt;/b&gt;&lt;br&gt;(:9100)&lt;br&gt;&lt;br&gt;❌ Only go_* / process_*&lt;br&gt;❌ No pipeline metrics&lt;br&gt;❌ No OTel export" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="470" width="200" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext_transform" value="&lt;b&gt;External&lt;br&gt;Transformer Plugin&lt;/b&gt;&lt;br&gt;(separate process)" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1100" y="150" width="160" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="dead" value="&lt;b&gt;DEAD CODE / BLOAT&lt;/b&gt;&lt;br&gt;&lt;br&gt;• driver_kgo.go (empty)&lt;br&gt;• driver_confluent.go (empty)&lt;br&gt;• AppControlledCheckpointMgr (unused)&lt;br&gt;• pkg/checkpoint/ (unused)&lt;br&gt;• Connector proto (unused)&lt;br&gt;• Health proto (unregistered)&lt;br&gt;• TransformStream (defined, never called)&lt;br&gt;• Control RPCs (all stubs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF0000;fontColor=#FFFFFF;strokeColor=#990000;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1100" y="320" width="260" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="kafka" target="src" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a2" value="pushFrame()" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="src" target="runner" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a3" value="Unary RPC" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="runner" target="ts1" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a3b" value="Unary RPC" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="runner" target="ts2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#9673a6;" parent="1" source="ts1" target="ext_transform" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a5" value="Publish()" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="runner" target="sink_stdout" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a6" value="Publish()" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="runner" target="sink_kafka" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a7" value="OnAck() callback" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#82b366;" parent="1" source="sink_kafka" target="src" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="target" name="2. Target Architecture (Pluggable Streaming)">
+        <mxGraphModel dx="1006" dy="696" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1400" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="t2" value="&lt;b&gt;TARGET ARCHITECTURE — PLUGGABLE STREAMING TRANSFORMS&lt;/b&gt;" style="text;html=1;fontSize=20;fontColor=#006600;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="350" y="10" width="700" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_group" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#4CAF50;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="80" width="220" height="340" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_label" value="&lt;b&gt;PLUGGABLE SOURCES&lt;/b&gt;" style="text;html=1;fontSize=13;fontColor=#2E7D32;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="85" width="200" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_kafka" value="&lt;b&gt;Kafka Source&lt;/b&gt;&lt;br&gt;(Sarama — keep)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="120" width="180" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_nats" value="&lt;b&gt;NATS Source&lt;/b&gt;&lt;br&gt;(future)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="180" width="180" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_http" value="&lt;b&gt;HTTP/Webhook Source&lt;/b&gt;&lt;br&gt;(future)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="240" width="180" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_stdin" value="&lt;b&gt;Stdin Source&lt;/b&gt;&lt;br&gt;(dev/test)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="300" width="180" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="src_iface" value="&lt;b&gt;source.Source interface&lt;/b&gt;&lt;br&gt;Configure() | Run() | Close()&lt;br&gt;OnAck() | Healthy()" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=15;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="360" width="180" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="source_iface_box" value="&lt;b&gt;Source&lt;br&gt;Registry&lt;/b&gt;" style="shape=process;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#C8E6C9;strokeColor=#4CAF50;fontSize=12;" parent="1" vertex="1">
+                    <mxGeometry x="290" y="160" width="100" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="core" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;dashed=0;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="80" width="480" height="600" as="geometry"/>
+                </mxCell>
+                <mxCell id="core_label" value="&lt;b&gt;PIPELINE ENGINE CORE&lt;/b&gt;" style="text;html=1;fontSize=15;fontColor=#E65100;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="85" width="300" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="router" value="&lt;b&gt;Stream Router&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Frame channel ingestion&lt;br&gt;• Backpressure-aware dispatch&lt;br&gt;• Fan-out to transform chains&lt;br&gt;• Partition-aware ordering" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#EF6C00;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="120" width="220" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="chain" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#E91E63;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="250" width="440" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="chain_label" value="&lt;b&gt;PLUGGABLE TRANSFORM CHAIN&lt;/b&gt; (ordered stages)" style="text;html=1;fontSize=12;fontColor=#C2185B;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="255" width="420" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="stage1" value="&lt;b&gt;Stage 1&lt;/b&gt;&lt;br&gt;gRPC Stream&lt;br&gt;or Unary&lt;br&gt;(configurable)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8BBD0;strokeColor=#C2185B;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="285" width="120" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="stage2" value="&lt;b&gt;Stage 2&lt;/b&gt;&lt;br&gt;In-Process&lt;br&gt;(Go plugin)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8BBD0;strokeColor=#C2185B;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="285" width="120" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="stageN" value="&lt;b&gt;Stage N&lt;/b&gt;&lt;br&gt;WASM&lt;br&gt;(future)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8BBD0;strokeColor=#C2185B;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="285" width="120" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="transform_iface" value="&lt;b&gt;transform.Transformer interface&lt;/b&gt;&lt;br&gt;Transform(ctx, Frame) → []Frame&lt;br&gt;Stream(ctx) → FrameStream&lt;br&gt;Metadata() | Health() | Close()" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=15;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="370" width="250" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="dlq" value="&lt;b&gt;Dead Letter&lt;br&gt;Queue&lt;/b&gt;&lt;br&gt;(failed frames)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#FFCDD2;strokeColor=#E53935;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="375" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="sink_router" value="&lt;b&gt;Sink Router&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Multi-sink fan-out&lt;br&gt;• Per-sink retry&lt;br&gt;• Ack coordination&lt;br&gt;• Circuit breaker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#EF6C00;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="470" width="220" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="ack_mgr" value="&lt;b&gt;Ack Manager&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Multi-sink ack tracking&lt;br&gt;• All-or-nothing commit&lt;br&gt;• Timeout-based fallback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#EF6C00;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="470" width="200" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="control" value="&lt;b&gt;Control Plane&lt;/b&gt;&lt;br&gt;(:7070)&lt;br&gt;&lt;br&gt;✅ Health (k8s probes)&lt;br&gt;✅ Liveness/Readiness&lt;br&gt;✅ Pipeline reload&lt;br&gt;✅ Pause/Resume" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="590" width="200" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="telemetry" value="&lt;b&gt;Telemetry&lt;/b&gt;&lt;br&gt;(:9100)&lt;br&gt;&lt;br&gt;✅ Per-stage latency&lt;br&gt;✅ Throughput counters&lt;br&gt;✅ Error rates by type&lt;br&gt;✅ OTel traces/metrics&lt;br&gt;✅ Backpressure gauge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="590" width="200" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext_grpc" value="&lt;b&gt;gRPC Transformer&lt;/b&gt;&lt;br&gt;(any language)&lt;br&gt;&lt;br&gt;Bidirectional Stream&lt;br&gt;or Unary fallback" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="980" y="120" width="200" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext_go" value="&lt;b&gt;In-Process Plugin&lt;/b&gt;&lt;br&gt;(Go, compiled in)" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="980" y="240" width="200" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext_wasm" value="&lt;b&gt;WASM Plugin&lt;/b&gt;&lt;br&gt;(sandboxed, future)" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="980" y="340" width="200" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="sink_group" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="980" y="460" width="220" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="sink_label" value="&lt;b&gt;PLUGGABLE SINKS&lt;/b&gt;" style="text;html=1;fontSize=13;fontColor=#0D47A1;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="465" width="200" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="s_kafka" value="&lt;b&gt;Kafka Sink&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="500" width="180" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="s_stdout" value="&lt;b&gt;Stdout Sink&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="545" width="180" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="s_http" value="&lt;b&gt;HTTP Sink&lt;/b&gt; (future)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="590" width="180" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="s_s3" value="&lt;b&gt;S3/GCS Sink&lt;/b&gt; (future)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11;strokeDasharray=5 5;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="635" width="180" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="sink_iface" value="&lt;b&gt;sink.Sink interface&lt;/b&gt;&lt;br&gt;Publish() | BindAck() | Close()" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;size=15;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="675" width="180" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="b1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#4CAF50;strokeWidth=2;" parent="1" source="source_iface_box" target="router" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b2" value="Frame channel" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#E65100;strokeWidth=2;" parent="1" source="router" target="stage1" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C2185B;strokeWidth=2;" parent="1" source="stage1" target="stage2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b3b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C2185B;strokeWidth=2;" parent="1" source="stage2" target="stageN" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b4" value="Bidirectional&lt;br&gt;gRPC Stream" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#9673a6;strokeWidth=2;" parent="1" source="stage1" target="ext_grpc" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b5" value="Direct call" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#9673a6;strokeWidth=2;" parent="1" source="stage2" target="ext_go" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b6" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#E65100;strokeWidth=2;" parent="1" source="chain" target="sink_router" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b7" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1565C0;strokeWidth=2;" parent="1" source="sink_router" target="s_kafka" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b8" value="Ack" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#4CAF50;strokeWidth=1;" parent="1" source="ack_mgr" target="source_iface_box" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b9" value="Failed" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#E53935;" parent="1" source="stage1" target="dlq" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b_src1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#4CAF50;" parent="1" source="src_kafka" target="source_iface_box" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="phases" name="3. Refactoring Phases">
+        <mxGraphModel dx="706" dy="696" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="&lt;b&gt;REFACTORING PHASES — EXECUTION PLAN&lt;/b&gt;" style="text;html=1;fontSize=20;fontColor=#1565C0;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="350" y="20" width="500" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="p0" value="&lt;b&gt;PHASE 0: CLEANUP (Week 1)&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;1. Delete driver_kgo.go, driver_confluent.go (empty stubs)&lt;br&gt;2. Delete pkg/checkpoint/ (unused, source has own)&lt;br&gt;3. Remove ApplicationControlledCheckpointManager&lt;br&gt;4. Remove dead Control RPC implementations&lt;br&gt;5. Clean up unused proto services from server registration&lt;br&gt;6. Remove InProcessClient stub (replace later)&lt;br&gt;7. Add .golangci.yml with deadcode/unused linters&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#E53935;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="80" width="340" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="p1" value="&lt;b&gt;PHASE 1: INTERFACES (Week 2)&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;1. Define source.Source interface (extract from Kafka)&lt;br&gt;&amp;nbsp;&amp;nbsp;• Configure(ctx, cfg) error&lt;br&gt;&amp;nbsp;&amp;nbsp;• Run(ctx, emit EmitFunc) error&lt;br&gt;&amp;nbsp;&amp;nbsp;• OnAck(token) | Close() | Healthy() bool&lt;br&gt;2. Create source/registry.go (like sink/registry.go)&lt;br&gt;3. Define transform.Transformer interface&lt;br&gt;&amp;nbsp;&amp;nbsp;• Transform(ctx, *Frame) ([]*Frame, error)&lt;br&gt;&amp;nbsp;&amp;nbsp;• Stream(ctx) (FrameStream, error)&lt;br&gt;&amp;nbsp;&amp;nbsp;• Mode() TransformMode // unary|stream|auto&lt;br&gt;&amp;nbsp;&amp;nbsp;• Metadata() | Health() | Close()&lt;br&gt;4. Create transform/registry.go&lt;br&gt;5. Ensure Kafka source satisfies source.Source&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="80" width="360" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2" value="&lt;b&gt;PHASE 2: STREAMING TRANSFORMS (Week 3-4)&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;1. Implement GRPCStreamClient (bidirectional)&lt;br&gt;&amp;nbsp;&amp;nbsp;• Uses existing TransformStream proto&lt;br&gt;&amp;nbsp;&amp;nbsp;• Persistent stream per connection&lt;br&gt;&amp;nbsp;&amp;nbsp;• Reconnect on stream break&lt;br&gt;2. Implement InProcessTransformer&lt;br&gt;&amp;nbsp;&amp;nbsp;• Direct Go function call, no serialization&lt;br&gt;&amp;nbsp;&amp;nbsp;• Compiled into engine binary&lt;br&gt;3. Update pipeline.yml schema:&lt;br&gt;&amp;nbsp;&amp;nbsp;transformers:&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;- name: enrich&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;type: grpc-stream | grpc-unary | in-process&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;address: localhost:8081&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;timeout: 5s&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;retries: 3&lt;br&gt;4. Update Runner to dispatch by Mode()&lt;br&gt;5. Connection pooling for gRPC clients&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#4CAF50;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="820" y="80" width="380" height="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="p3" value="&lt;b&gt;PHASE 3: PRODUCTION HARDENING (Week 5-6)&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;1. Dead Letter Queue (DLQ)&lt;br&gt;&amp;nbsp;&amp;nbsp;• DLQ as a special sink (Kafka topic or file)&lt;br&gt;&amp;nbsp;&amp;nbsp;• Frame + error reason + retry count&lt;br&gt;2. Health service implementation&lt;br&gt;&amp;nbsp;&amp;nbsp;• Register on gRPC server&lt;br&gt;&amp;nbsp;&amp;nbsp;• k8s liveness: engine alive?&lt;br&gt;&amp;nbsp;&amp;nbsp;• k8s readiness: source connected + transformers healthy?&lt;br&gt;3. Per-stage Prometheus metrics&lt;br&gt;&amp;nbsp;&amp;nbsp;• transform_latency_seconds{stage=&quot;name&quot;}&lt;br&gt;&amp;nbsp;&amp;nbsp;• transform_errors_total{stage,error_type}&lt;br&gt;&amp;nbsp;&amp;nbsp;• pipeline_throughput_frames_total&lt;br&gt;&amp;nbsp;&amp;nbsp;• backpressure_utilization_ratio&lt;br&gt;4. Circuit breaker per transformer stage&lt;br&gt;5. Sink-level retry with backoff (not fatal)&lt;br&gt;6. Structured error classification&lt;br&gt;&amp;nbsp;&amp;nbsp;• Transient vs permanent errors&lt;br&gt;&amp;nbsp;&amp;nbsp;• Different retry policies per type&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="350" width="380" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="p4" value="&lt;b&gt;PHASE 4: OBSERVABILITY + OTel (Week 7)&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;1. OpenTelemetry SDK integration&lt;br&gt;&amp;nbsp;&amp;nbsp;• TracerProvider + MeterProvider&lt;br&gt;&amp;nbsp;&amp;nbsp;• OTLP exporter (Jaeger/Tempo compatible)&lt;br&gt;2. Trace propagation per frame&lt;br&gt;&amp;nbsp;&amp;nbsp;• Source → Transform stages → Sink spans&lt;br&gt;&amp;nbsp;&amp;nbsp;• Parent/child span relationships&lt;br&gt;3. Metrics: OTel + Prometheus dual export&lt;br&gt;4. Log correlation: trace_id in every log line&lt;br&gt;5. Dashboard templates (Grafana JSON)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#7B1FA2;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="370" width="340" height="240" as="geometry"/>
+                </mxCell>
+                <mxCell id="p5" value="&lt;b&gt;PHASE 5: EXTENSIBILITY (Week 8+)&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;1. Source plugin SDK (new sources w/o forking)&lt;br&gt;2. Transformer plugin SDK&lt;br&gt;&amp;nbsp;&amp;nbsp;• Proto + Go template for new plugins&lt;br&gt;&amp;nbsp;&amp;nbsp;• Python/Rust transformer examples&lt;br&gt;3. WASM transformer runtime (optional)&lt;br&gt;4. Pipeline hot-reload (implement DeployPipeline)&lt;br&gt;5. Multi-pipeline support (fan-out topologies)&lt;br&gt;6. Stdin/stdout source+sink for local dev&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D1C4E9;strokeColor=#512DA8;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="420" width="360" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa1" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#666;" parent="1" source="p0" target="p1" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa2" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#666;" parent="1" source="p1" target="p2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa3" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#666;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" parent="1" source="p2" target="p3" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1010" y="400"/>
+                            <mxPoint x="400" y="400"/>
+                            <mxPoint x="400" y="510"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="pa4" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#666;" parent="1" source="p3" target="p4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pa5" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=3;strokeColor=#666;" parent="1" source="p4" target="p5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="streaming" name="4. gRPC Streaming Transform Detail">
+        <mxGraphModel dx="1006" dy="696" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="&lt;b&gt;gRPC BIDIRECTIONAL STREAMING — TRANSFORM PROTOCOL&lt;/b&gt;" style="text;html=1;fontSize=18;fontColor=#1565C0;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="10" width="600" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="eng_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="60" width="500" height="500" as="geometry"/>
+                </mxCell>
+                <mxCell id="eng_label" value="&lt;b&gt;ENGINE (GRPCStreamClient)&lt;/b&gt;" style="text;html=1;fontSize=14;fontColor=#E65100;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="65" width="350" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" value="&lt;b&gt;1. Open Stream&lt;/b&gt;&lt;br&gt;&lt;br&gt;stream, err := stub.TransformStream(ctx)&lt;br&gt;&lt;br&gt;• One persistent stream per stage&lt;br&gt;• Auto-reconnect on break&lt;br&gt;• Connection pooling" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#EF6C00;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="100" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="e2" value="&lt;b&gt;2. Send Frames&lt;/b&gt;&lt;br&gt;&lt;br&gt;stream.Send(&amp;TransformRequest{&lt;br&gt;&amp;nbsp;&amp;nbsp;Frame: frame,&lt;br&gt;&amp;nbsp;&amp;nbsp;RequestId: uuid,&lt;br&gt;})&lt;br&gt;&lt;br&gt;• Non-blocking send&lt;br&gt;• Backpressure via flow control" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#EF6C00;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="220" width="300" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3" value="&lt;b&gt;3. Receive Results&lt;/b&gt;&lt;br&gt;&lt;br&gt;resp, err := stream.Recv()&lt;br&gt;&lt;br&gt;• Correlated by RequestId&lt;br&gt;• May return multiple events (fan-out)&lt;br&gt;• Status: OK / DROP / ERROR&lt;br&gt;• Concurrent send/recv goroutines" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#EF6C00;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="360" width="300" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="plug_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#7B1FA2;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="60" width="500" height="500" as="geometry"/>
+                </mxCell>
+                <mxCell id="plug_label" value="&lt;b&gt;TRANSFORMER PLUGIN (any language)&lt;/b&gt;" style="text;html=1;fontSize=14;fontColor=#4A148C;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="700" y="65" width="360" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="p1s" value="&lt;b&gt;1. Accept Stream&lt;/b&gt;&lt;br&gt;&lt;br&gt;func TransformStream(stream) {&lt;br&gt;&amp;nbsp;&amp;nbsp;for {&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;req, err := stream.Recv()&lt;br&gt;&amp;nbsp;&amp;nbsp;}&lt;br&gt;}&lt;br&gt;&lt;br&gt;• Long-lived connection&lt;br&gt;• Plugin manages own state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CE93D8;strokeColor=#7B1FA2;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="100" width="300" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2s" value="&lt;b&gt;2. Process &amp; Transform&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Apply business logic&lt;br&gt;• Enrich, filter, split, aggregate&lt;br&gt;• Stateful processing possible&lt;br&gt;• Windowed aggregation&lt;br&gt;• Can hold state across frames" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CE93D8;strokeColor=#7B1FA2;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="250" width="300" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="p3s" value="&lt;b&gt;3. Send Response&lt;/b&gt;&lt;br&gt;&lt;br&gt;stream.Send(&amp;TransformResponse{&lt;br&gt;&amp;nbsp;&amp;nbsp;RequestId: req.RequestId,&lt;br&gt;&amp;nbsp;&amp;nbsp;Status: OK,&lt;br&gt;&amp;nbsp;&amp;nbsp;Events: []*Event{...},&lt;br&gt;})&lt;br&gt;&lt;br&gt;• 1:N output (fan-out)&lt;br&gt;• Preserve correlation ID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CE93D8;strokeColor=#7B1FA2;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="380" width="300" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="sa1" value="&lt;b&gt;Send(req)&lt;/b&gt;" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#EF6C00;strokeWidth=3;" parent="1" source="e2" target="p1s" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="560" y="280"/>
+                            <mxPoint x="560" y="165"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="sa2" value="&lt;b&gt;Recv(resp)&lt;/b&gt;" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#7B1FA2;strokeWidth=3;" parent="1" source="p3s" target="e3" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="600" y="445"/>
+                            <mxPoint x="600" y="420"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="perf" value="&lt;b&gt;STREAMING vs UNARY PERFORMANCE&lt;/b&gt;&lt;hr&gt;&lt;div style=&#39;text-align:left;font-size:11px;&#39;&gt;&lt;b&gt;Unary (current):&lt;/b&gt;&lt;br&gt;• New HTTP/2 stream per frame → overhead&lt;br&gt;• Serialize → send → wait → deserialize per msg&lt;br&gt;• ~1-5ms round-trip per transform&lt;br&gt;&lt;br&gt;&lt;b&gt;Bidirectional Stream (target):&lt;/b&gt;&lt;br&gt;• Single persistent HTTP/2 stream&lt;br&gt;• Pipelined: send N, recv N concurrently&lt;br&gt;• ~0.1-0.5ms per transform (10x faster)&lt;br&gt;• Plugin can batch internally&lt;br&gt;• Natural backpressure via gRPC flow control&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#4CAF50;fontSize=12;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="280" y="600" width="500" height="200" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="config" name="5. Pipeline Config Schema">
+        <mxGraphModel dx="1006" dy="696" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="&lt;b&gt;TARGET pipeline.yml SCHEMA&lt;/b&gt;" style="text;html=1;fontSize=18;fontColor=#1565C0;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="10" width="400" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="yaml" value="&lt;div style=&#39;text-align:left;font-family:JetBrains Mono,monospace;font-size:12px;&#39;&gt;&lt;pre&gt;schema_version: v2&#xa;&#xa;source:&#xa;  kind: kafka            # kafka | nats | http | stdin&#xa;  driver: sarama&#xa;  config: kafka_source.yml&#xa;&#xa;transformers:&#xa;  - name: enrich&#xa;    type: grpc-stream      # grpc-stream | grpc-unary | in-process&#xa;    address: localhost:8081&#xa;    timeout: 5s&#xa;    retries: 3&#xa;    retry_backoff: 200ms&#xa;    circuit_breaker:&#xa;      threshold: 5&#xa;      timeout: 30s&#xa;&#xa;  - name: filter&#xa;    type: in-process&#xa;    plugin: filter_empty    # registered Go function&#xa;&#xa;  - name: format&#xa;    type: grpc-unary        # fallback for simple transforms&#xa;    address: localhost:8082&#xa;    timeout: 2s&#xa;    retries: 1&#xa;&#xa;sinks:&#xa;  - stdout&#xa;  - kafka&#xa;&#xa;sink_configs:&#xa;  kafka:&#xa;    brokers: [localhost:9092]&#xa;    topic: output-topic&#xa;    acks: all&#xa;&#xa;dlq:                       # NEW: dead letter queue&#xa;  enabled: true&#xa;  sink: kafka&#xa;  topic: quanta-dlq&#xa;  include_error: true&#xa;  include_stacktrace: false&#xa;&#xa;health:                    # NEW: health probes&#xa;  enabled: true&#xa;  liveness_path: /healthz&#xa;  readiness_path: /readyz&#xa;&#xa;telemetry:                 # NEW: observability config&#xa;  metrics:&#xa;    prometheus: true&#xa;    otel_endpoint: localhost:4317&#xa;  tracing:&#xa;    enabled: true&#xa;    sample_rate: 0.1&#xa;    otel_endpoint: localhost:4317&lt;/pre&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#9E9E9E;fontSize=12;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="60" width="480" height="780" as="geometry"/>
+                </mxCell>
+                <mxCell id="a1" value="&lt;b&gt;NEW: type field&lt;/b&gt;&lt;br&gt;Selects transform backend:&lt;br&gt;• grpc-stream (persistent bidi)&lt;br&gt;• grpc-unary (current behavior)&lt;br&gt;• in-process (Go function)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#4CAF50;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="120" width="260" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="a2" value="&lt;b&gt;NEW: circuit_breaker&lt;/b&gt;&lt;br&gt;Per-stage failure isolation.&lt;br&gt;Opens after N consecutive failures,&lt;br&gt;half-opens after timeout." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="230" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="a3" value="&lt;b&gt;NEW: in-process plugin&lt;/b&gt;&lt;br&gt;Register Go functions as transforms.&lt;br&gt;Zero serialization overhead.&lt;br&gt;Compiled into engine binary." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#7B1FA2;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="330" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="a4" value="&lt;b&gt;NEW: Dead Letter Queue&lt;/b&gt;&lt;br&gt;Failed frames route here&lt;br&gt;instead of silent drop.&lt;br&gt;Includes error context." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#E53935;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="500" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="a5" value="&lt;b&gt;NEW: Telemetry config&lt;/b&gt;&lt;br&gt;OTel traces + metrics export.&lt;br&gt;Trace every frame through&lt;br&gt;the full pipeline." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="650" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa1" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#4CAF50;" parent="1" source="a1" target="yaml" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa2" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#F9A825;" parent="1" source="a2" target="yaml" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa3" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#7B1FA2;" parent="1" source="a3" target="yaml" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa4" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#E53935;" parent="1" source="a4" target="yaml" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa5" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#1565C0;" parent="1" source="a5" target="yaml" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

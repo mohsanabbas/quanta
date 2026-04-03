@@ -1,8 +1,22 @@
 package kafka
 
 import (
+	"errors"
 	"fmt"
 	"time"
+
+	qerr "quanta/internal/errors"
+)
+
+const (
+	_defaultTimeout      = 10 * time.Second
+	_defaultRetryMax     = 3
+	_defaultRetryBackoff = 100 * time.Millisecond
+	_defaultVersion      = "3.6.0"
+	_acksAll             = "all"
+	_acksNone            = "none"
+	_acksLocal           = "local"
+	_compressionNone     = "none"
 )
 
 type Config struct {
@@ -13,54 +27,52 @@ type Config struct {
 	SASLUser    string   `koanf:"sasl_user"`
 	SASLPass    string   `koanf:"sasl_pass"`
 	ClientID    string   `koanf:"client_id"`
-	Acks        string   `koanf:"acks"`        // none|local|all
-	Compression string   `koanf:"compression"` // none|gzip|snappy|lz4|zstd
+	Acks        string   `koanf:"acks"`
+	Compression string   `koanf:"compression"`
 	Idempotent  bool     `koanf:"idempotent"`
 
-	// timeouts / retries
-	Timeout         time.Duration `koanf:"timeout"`           // producer request timeout
-	RetryMax        int           `koanf:"retry_max"`         // producer retry max
-	RetryBackoffMin time.Duration `koanf:"retry_backoff_min"` // min backoff
-	RetryBackoffMax time.Duration `koanf:"retry_backoff_max"` // max backoff
+	Timeout         time.Duration `koanf:"timeout"`
+	RetryMax        int           `koanf:"retry_max"`
+	RetryBackoffMin time.Duration `koanf:"retry_backoff_min"`
+	RetryBackoffMax time.Duration `koanf:"retry_backoff_max"`
 
-	// header-based overrides optional
-	HeaderTopicKey string `koanf:"header_topic_key"` // e.g. "kafka.topic"
+	HeaderTopicKey string `koanf:"header_topic_key"`
 }
 
 func (c *Config) validateAndDefault() error {
 	if len(c.Brokers) == 0 {
-		return fmt.Errorf("brokers required")
+		return qerr.Config("kafka-sink", "validate", errors.New("brokers required"))
 	}
 	if c.Topic == "" && c.HeaderTopicKey == "" {
-		return fmt.Errorf("either topic or header_topic_key must be set")
+		return qerr.Config("kafka-sink", "validate", errors.New("either topic or header_topic_key must be set"))
 	}
 	if c.Version == "" {
-		c.Version = "3.6.0"
+		c.Version = _defaultVersion
 	}
 	if c.Acks == "" {
-		c.Acks = "all"
+		c.Acks = _acksAll
 	}
 	switch c.Acks {
-	case "none", "local", "all":
+	case _acksNone, _acksLocal, _acksAll:
 	default:
-		return fmt.Errorf("invalid acks %q (want: none|local|all)", c.Acks)
+		return qerr.Config("kafka-sink", "validate", fmt.Errorf("invalid acks %q (want: none|local|all)", c.Acks))
 	}
 	if c.Compression == "" {
-		c.Compression = "none"
+		c.Compression = _compressionNone
 	}
 	switch c.Compression {
 	case "none", "gzip", "snappy", "lz4", "zstd":
 	default:
-		return fmt.Errorf("invalid compression %q", c.Compression)
+		return qerr.Config("kafka-sink", "validate", fmt.Errorf("invalid compression %q", c.Compression))
 	}
 	if c.Timeout <= 0 {
-		c.Timeout = 10 * time.Second
+		c.Timeout = _defaultTimeout
 	}
 	if c.RetryMax <= 0 {
-		c.RetryMax = 3
+		c.RetryMax = _defaultRetryMax
 	}
 	if c.RetryBackoffMin <= 0 {
-		c.RetryBackoffMin = 100 * time.Millisecond
+		c.RetryBackoffMin = _defaultRetryBackoff
 	}
 	if c.RetryBackoffMax < c.RetryBackoffMin {
 		c.RetryBackoffMax = c.RetryBackoffMin

@@ -3,9 +3,10 @@ package kafka
 import (
 	"fmt"
 	"log/slog"
+
+	qerr "quanta/internal/errors"
 )
 
-// BackpressureStrategy defines the type of backpressure to apply.
 type BackpressureStrategy string
 
 const (
@@ -14,7 +15,6 @@ const (
 	BackpressureStrategyCombined BackpressureStrategy = "combined"
 )
 
-// CheckpointStrategy defines the checkpoint tracking approach.
 type CheckpointStrategy string
 
 const (
@@ -22,7 +22,6 @@ const (
 	CheckpointStrategyApplicationControlled CheckpointStrategy = "application_controlled"
 )
 
-// CommitStrategyType defines when to commit offsets in e2e mode.
 type CommitStrategyType string
 
 const (
@@ -31,14 +30,12 @@ const (
 	CommitStrategyTypeHybrid   CommitStrategyType = "hybrid"
 )
 
-// NewBackpressureManager creates a BackpressureManager based on the
-// configured strategy and tuning parameters.
 func NewBackpressureManager(cfg Config) (BackpressureManager, error) {
 	pub := cfg.Public()
 	tun := cfg.Tuning()
 	strategy := BackpressureStrategy(pub.BackpressureStrategy)
 	if strategy == "" {
-		strategy = BackpressureStrategyCombined // default
+		strategy = BackpressureStrategyCombined
 	}
 
 	switch strategy {
@@ -49,18 +46,16 @@ func NewBackpressureManager(cfg Config) (BackpressureManager, error) {
 	case BackpressureStrategyCombined:
 		return NewCombinedBackpressureManager(tun.InFlightBytes, tun.InFlightMsgs), nil
 	default:
-		return nil, fmt.Errorf("unknown backpressure strategy: %s", strategy)
+		return nil, qerr.Config("kafka", "backpressure", fmt.Errorf("unknown strategy: %s", strategy))
 	}
 }
 
-// NewCheckpointManager creates a CheckpointManager based on the configured
-// strategy and tuning parameters.
 func NewCheckpointManager(cfg Config) (CheckpointManager, error) {
 	pub := cfg.Public()
 	tun := cfg.Tuning()
 	strategy := CheckpointStrategy(pub.CheckpointStrategy)
 	if strategy == "" {
-		strategy = CheckpointStrategySlidingWindow // default
+		strategy = CheckpointStrategySlidingWindow
 	}
 
 	switch strategy {
@@ -69,18 +64,16 @@ func NewCheckpointManager(cfg Config) (CheckpointManager, error) {
 	case CheckpointStrategyApplicationControlled:
 		return NewApplicationControlledCheckpointManager(tun.InFlightMsgs), nil
 	default:
-		return nil, fmt.Errorf("unknown checkpoint strategy: %s", strategy)
+		return nil, qerr.Config("kafka", "checkpoint", fmt.Errorf("unknown strategy: %s", strategy))
 	}
 }
 
-// NewCommitStrategy creates a CommitStrategy based on the configured
-// strategy and tuning parameters.
 func NewCommitStrategy(cfg Config, logger *slog.Logger) (CommitStrategy, error) {
 	pub := cfg.Public()
 	tun := cfg.Tuning()
 	strategy := CommitStrategyType(pub.CommitStrategyType)
 	if strategy == "" {
-		strategy = CommitStrategyTypeHybrid // default
+		strategy = CommitStrategyTypeHybrid
 	}
 
 	switch strategy {
@@ -91,6 +84,6 @@ func NewCommitStrategy(cfg Config, logger *slog.Logger) (CommitStrategy, error) 
 	case CommitStrategyTypeHybrid:
 		return NewHybridCommitStrategy(int64(tun.CommitStep), tun.CommitInterval, logger), nil
 	default:
-		return nil, fmt.Errorf("unknown commit strategy: %s", strategy)
+		return nil, qerr.Config("kafka", "commit", fmt.Errorf("unknown strategy: %s", strategy))
 	}
 }

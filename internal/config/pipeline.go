@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	qerr "quanta/internal/errors"
 
 	"gopkg.in/yaml.v3"
 )
@@ -75,17 +78,18 @@ func LoadPipelineSpec(path string) (PipelineConfig, error) {
 	var cfg PipelineConfig
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return cfg, err
+		return cfg, qerr.Config("pipeline", "read", err)
 	}
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return cfg, err
+		return cfg, qerr.Config("pipeline", "parse", err)
 	}
 
 	if cfg.SchemaVersion == "" {
 		cfg.SchemaVersion = SupportedPipelineSchema
 	}
 	if cfg.SchemaVersion != SupportedPipelineSchema {
-		return cfg, fmt.Errorf("pipeline schema_version %q not supported (want %q)", cfg.SchemaVersion, SupportedPipelineSchema)
+		return cfg, qerr.Config("pipeline", "validate",
+			fmt.Errorf("schema_version %q not supported (want %q)", cfg.SchemaVersion, SupportedPipelineSchema))
 	}
 
 	if cfg.SinkConfigs == nil {
@@ -131,28 +135,32 @@ func (t TransformerConfig) RetryBackoff() time.Duration {
 
 func (c PipelineConfig) validate() error {
 	if c.Source.Kind == "" {
-		return fmt.Errorf("pipeline: source.kind required")
+		return qerr.Config("pipeline", "validate", errors.New("source.kind required"))
 	}
 	if c.Source.Driver == "" {
-		return fmt.Errorf("pipeline: source.driver required")
+		return qerr.Config("pipeline", "validate", errors.New("source.driver required"))
 	}
 	if c.Source.Config == "" && c.Source.Inline.Node == nil {
-		return fmt.Errorf("pipeline: source.config or source.inline required")
+		return qerr.Config("pipeline", "validate", errors.New("source.config or source.inline required"))
 	}
 	for i, t := range c.Transformers {
 		if t.Name == "" {
-			return fmt.Errorf("pipeline: transformers[%d].name required", i)
+			return qerr.Config("pipeline", "validate",
+				fmt.Errorf("transformers[%d].name required", i))
 		}
 		if t.Type == "" {
-			return fmt.Errorf("pipeline: transformers[%d].type required", i)
+			return qerr.Config("pipeline", "validate",
+				fmt.Errorf("transformers[%d].type required", i))
 		}
 		switch t.Type {
 		case "grpc":
 			if t.Address == "" {
-				return fmt.Errorf("pipeline: transformers[%d].address required for grpc", i)
+				return qerr.Config("pipeline", "validate",
+					fmt.Errorf("transformers[%d].address required for grpc", i))
 			}
 		default:
-			return fmt.Errorf("pipeline: unsupported transformer type %q", t.Type)
+			return qerr.Config("pipeline", "validate",
+				fmt.Errorf("unsupported transformer type %q", t.Type))
 		}
 	}
 	return nil

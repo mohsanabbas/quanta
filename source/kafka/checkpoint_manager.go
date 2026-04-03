@@ -8,17 +8,22 @@ import (
 
 var ErrCheckpointClosed = errors.New("kafka: checkpoint manager closed")
 
+const (
+	_defaultCapacity = 1024
+	_spinBackoff     = 200 * time.Microsecond
+)
+
 type SlidingWindowCheckpointManager struct {
 	tracker *PartitionTracker
 	acker   *OffsetTracker
 }
 
 func NewSlidingWindowCheckpointManager(windowBits uint32, capacity int) *SlidingWindowCheckpointManager {
-	if windowBits < 256 {
-		windowBits = 4096
+	if windowBits < _minWindowBits {
+		windowBits = _defaultWindow
 	}
 	if capacity <= 0 {
-		capacity = 1024
+		capacity = _defaultCapacity
 	}
 	return &SlidingWindowCheckpointManager{
 		tracker: NewPartitionTracker(windowBits),
@@ -30,7 +35,7 @@ func (c *SlidingWindowCheckpointManager) Track(offset int64, size int64) error {
 	if size <= 0 {
 		size = 1
 	}
-	backoff := 200 * time.Microsecond
+	backoff := _spinBackoff
 	for {
 		if c.tracker.Reserve(offset) != InvalidSlot {
 			break

@@ -2,7 +2,10 @@ package sink
 
 import (
 	"context"
-	"fmt"
+	"errors"
+
+	qerr "quanta/internal/errors"
+
 	pb "quanta/api/proto/v1"
 )
 
@@ -24,24 +27,27 @@ type Registration struct {
 	ConfigProto func() any
 }
 
-var registry = map[string]Registration{}
+var _registry = map[string]Registration{}
 
 func Register(r Registration) {
 	if r.Name == "" {
 		panic("sink: registration missing name")
 	}
 	if r.New == nil {
-		panic(fmt.Sprintf("sink: registration %q missing constructor", r.Name))
+		panic("sink: registration " + r.Name + " missing constructor")
 	}
-	registry[r.Name] = r
+	_registry[r.Name] = r
 }
 
-func Lookup(name string) (Registration, bool) { reg, ok := registry[name]; return reg, ok }
+func Lookup(name string) (Registration, bool) {
+	reg, ok := _registry[name]
+	return reg, ok
+}
 
 func New(name string) (Adapter, any, error) {
-	reg, ok := registry[name]
+	reg, ok := _registry[name]
 	if !ok {
-		return nil, nil, fmt.Errorf("sink: unknown adapter %q", name)
+		return nil, nil, qerr.Sink(name, "create", errors.New("unknown adapter"))
 	}
 	inst := reg.New()
 	var cfg any

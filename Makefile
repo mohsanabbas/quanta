@@ -115,4 +115,17 @@ docker-smoke:
 	@sleep 2
 	@curl -sf http://localhost:9100/metrics | head -n 5
 
-.PHONY: proto tools build test vet lint lint-checkstyle lint-fix clean build-linux
+# -------- seed producer (local CLI) ------------------------------------------
+SEED_BROKERS ?= localhost:9094
+SEED_TOPIC   ?= event-tracking_track-events-approved
+SEED_COUNT   ?= 100000
+SEED_DELAY   ?= 0
+
+seed: proto
+	@go run ./cmd/seed \
+		-brokers $(SEED_BROKERS) \
+		-topic $(SEED_TOPIC) \
+		-count $(SEED_COUNT) \
+		-delay $(SEED_DELAY)
+
+.PHONY: proto tools build test vet lint lint-checkstyle lint-fix clean build-linux seed

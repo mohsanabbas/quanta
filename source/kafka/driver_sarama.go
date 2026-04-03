@@ -9,16 +9,12 @@ import (
 	"sync"
 
 	pb "quanta/api/proto/v1"
+	qerr "quanta/internal/errors"
 
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// SaramaDriver is an Adapter implementation that consumes records from Kafka
-// using the Sarama library. It supports both auto and end‑to‑end commit
-// semantics and applies backpressure based on message size and count. A
-// SaramaDriver must be registered via Register() or RegisterDefaults() before
-// it can be constructed through NewAdapter().
 type SaramaDriver struct {
 	cfg    Config
 	mode   CommitMode
@@ -28,12 +24,11 @@ type SaramaDriver struct {
 	group sarama.ConsumerGroup
 
 	baseAttrs  []slog.Attr
-	partitions sync.Map // string -> *partitionProcessor
+	partitions sync.Map
 }
 
-// Configure sets up the SaramaDriver with the provided configuration. It
-// creates the underlying Sarama client and consumer group. Sarama logging is
-// wired through slog based on the SaramaVerbose flag.
+var _ Adapter = (*SaramaDriver)(nil)
+
 func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	d.cfg = cfg
 	pub := cfg.Public()
@@ -41,11 +36,13 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	d.mode = pub.CommitMode
 	d.tuning = tun
 
-	if tun.WindowBits < 256 {
-		return fmt.Errorf("kafka tuning: window_bits (%d) must be >= 256", tun.WindowBits)
+	if tun.WindowBits < _minWindowBits {
+		return qerr.Config("kafka", "validate",
+			fmt.Errorf("window_bits (%d) must be >= %d", tun.WindowBits, _minWindowBits))
 	}
 	if int64(tun.WindowBits) < tun.InFlightMsgs {
-		return fmt.Errorf("kafka tuning: inflight_msgs (%d) must be <= window_bits (%d)", tun.InFlightMsgs, tun.WindowBits)
+		return qerr.Config("kafka", "validate",
+			fmt.Errorf("inflight_msgs (%d) must be <= window_bits (%d)", tun.InFlightMsgs, tun.WindowBits))
 	}
 
 	d.baseAttrs = []slog.Attr{
@@ -61,7 +58,6 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 
 	d.loggerWithContext(ctx).Info("configuring kafka source driver")
 
-	// Parse Kafka version. An empty version means use the latest supported by Sarama.
 	var ver sarama.KafkaVersion
 	if pub.Version == "" {
 		ver = sarama.MaxVersion
@@ -108,7 +104,7 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	d.group = group
 
 	if pub.SaramaVerbose {
-		sarama.Logger = &saramaSlogAdapter{logger: d.logger(slog.String("library", "sarama"))}
+		sarama.Logger = &saramaSlogAdapter{logger: d.loggerWithContext(ctx, slog.String("library", "sarama"))}
 		d.loggerWithContext(ctx).Info("sarama verbose logging enabled")
 	} else {
 		sarama.Logger = &saramaNoopLogger{}
@@ -118,10 +114,6 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Run starts the consumption loop for all configured topics. It blocks until
-// the context is cancelled or an unrecoverable error occurs. Each call to
-// Consume assigns partitions to partitionProcessor instances which handle
-// individual message processing and ack tracking.
 func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
 	pub := d.cfg.Public()
 	log := d.loggerWithContext(ctx, slog.String("stage", "run"), slog.String("group_id", pub.GroupID))
@@ -143,11 +135,8 @@ func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
 	}
 }
 
-// Close shuts down the consumer group and underlying client. It does not
-// release backpressure tokens or stop any partition goroutines; those are
-// handled during partition revocation. Errors are logged but not returned.
-func (d *SaramaDriver) Close(context.Context) error {
-	log := d.logger(slog.String("stage", "close"))
+func (d *SaramaDriver) Close(ctx context.Context) error {
+	log := d.loggerWithContext(ctx, slog.String("stage", "close"))
 	if d.group != nil {
 		if err := d.group.Close(); err != nil {
 			log.Error("failed to close consumer group", slog.String("error", err.Error()))
@@ -162,9 +151,6 @@ func (d *SaramaDriver) Close(context.Context) error {
 	return nil
 }
 
-// OnAck is invoked by the pipeline when a ConnectorAck is received. It
-// forwards the ack to the appropriate partitionProcessor which will advance
-// the commit window and release backpressure tokens accordingly.
 func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {
 	if ack == nil || ack.Checkpoint == nil {
 		return
@@ -185,42 +171,32 @@ func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {
 		return
 	}
 	pp := value.(*partitionProcessor)
-	handle := AckHandle{offset: kafkaAck.Offset, bytes: 0} // bytes handled by checkpoint manager
+	handle := AckHandle{offset: kafkaAck.Offset, bytes: 0}
 	pp.OnAck(handle)
 }
 
-// groupHandler is a Sarama ConsumerGroupHandler that delegates message
-// processing to partitionProcessor instances.
 type groupHandler struct {
 	driver *SaramaDriver
 	emit   EmitFunc
 }
 
-// Setup is called at the beginning of a new session. We do nothing here.
 func (*groupHandler) Setup(sarama.ConsumerGroupSession) error { return nil }
 
-// Cleanup is called at the end of a session. We do nothing here because
-// partitionProcessor.Shutdown handles flushing and releasing resources when
-// partitions are revoked.
 func (h *groupHandler) Cleanup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
-// ConsumeClaim runs the partition loop for a single assigned partition. It
-// constructs a partitionProcessor using the component factory, stores it in
-// the driver's map, and processes messages until the claim is closed.
 func (h *groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	key := partitionKey(claim.Topic(), claim.Partition())
 
-	// Create strategy components using package-level factory functions
 	backpressureMgr, err := NewBackpressureManager(h.driver.cfg)
 	if err != nil {
-		return fmt.Errorf("create backpressure manager: %w", err)
+		return qerr.Source("kafka", "backpressure", err)
 	}
 
 	checkpointMgr, err := NewCheckpointManager(h.driver.cfg)
 	if err != nil {
-		return fmt.Errorf("create checkpoint manager: %w", err)
+		return qerr.Source("kafka", "checkpoint", err)
 	}
 
 	logger := h.driver.logger(
@@ -229,10 +205,9 @@ func (h *groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sara
 	)
 	commitStrategy, err := NewCommitStrategy(h.driver.cfg, logger)
 	if err != nil {
-		return fmt.Errorf("create commit strategy: %w", err)
+		return qerr.Source("kafka", "commit", err)
 	}
 
-	// Create the partition processor with injected dependencies
 	pp := newPartitionProcessor(
 		h.driver,
 		sess,
@@ -269,8 +244,6 @@ func (h *groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sara
 	}
 }
 
-// nextMessage reads the next message from the claim or returns false when the
-// claim is closed or an error occurs.
 func (h *groupHandler) nextMessage(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) (*sarama.ConsumerMessage, bool, error) {
 	select {
 	case <-sess.Context().Done():
@@ -283,29 +256,20 @@ func (h *groupHandler) nextMessage(sess sarama.ConsumerGroupSession, claim saram
 	}
 }
 
-// partitionKey constructs a stable identifier for a topic/partition pair.
 func partitionKey(topic string, partition int32) string {
 	return fmt.Sprintf("%s/%d", topic, partition)
 }
 
-// logger constructs a slog logger with the driver's base attributes and the
-// provided additional attributes. It ignores any context stored attributes.
 func (d *SaramaDriver) logger(attrs ...slog.Attr) *slog.Logger {
 	combined := append(append([]slog.Attr{}, d.baseAttrs...), attrs...)
 	return logger(combined...)
 }
 
-// loggerWithContext constructs a slog logger that includes attributes from
-// the context as well as the driver's base attributes and the provided
-// additional attributes.
 func (d *SaramaDriver) loggerWithContext(ctx context.Context, attrs ...slog.Attr) *slog.Logger {
 	combined := append(append([]slog.Attr{}, d.baseAttrs...), attrs...)
 	return loggerFromContext(ctx, combined...)
 }
 
-// estimateMessageSize computes an approximate size for a Sarama message by
-// summing the lengths of the key, value and headers. A minimum size of one
-// is returned to avoid zero‐weight acquisitions.
 func estimateMessageSize(msg *sarama.ConsumerMessage) int64 {
 	size := len(msg.Key) + len(msg.Value)
 	for _, h := range msg.Headers {
@@ -319,9 +283,6 @@ func estimateMessageSize(msg *sarama.ConsumerMessage) int64 {
 	return int64(size)
 }
 
-// messageToFrame converts a Sarama message into a Frame for the pipeline.
-// It copies the key and value to avoid retaining references to the broker
-// buffers and constructs a CheckpointToken for end‑to‑end acknowledgments.
 func messageToFrame(msg *sarama.ConsumerMessage) *pb.Frame {
 	keyCopy := append([]byte(nil), msg.Key...)
 	valueCopy := append([]byte(nil), msg.Value...)
@@ -335,7 +296,6 @@ func messageToFrame(msg *sarama.ConsumerMessage) *pb.Frame {
 	}
 }
 
-// toCheckpoint constructs a CheckpointToken for the provided message.
 func toCheckpoint(msg *sarama.ConsumerMessage) *pb.CheckpointToken {
 	return &pb.CheckpointToken{
 		Kind: &pb.CheckpointToken_Kafka{
@@ -348,9 +308,6 @@ func toCheckpoint(msg *sarama.ConsumerMessage) *pb.CheckpointToken {
 	}
 }
 
-// toHeaderMapCopy converts Sarama headers into a map of string keys to
-// byte slices. It copies the header values to avoid retaining broker
-// buffers. A nil map is returned if no headers are present.
 func toHeaderMapCopy(src []*sarama.RecordHeader) map[string][]byte {
 	if len(src) == 0 {
 		return nil
@@ -366,8 +323,6 @@ func toHeaderMapCopy(src []*sarama.RecordHeader) map[string][]byte {
 	return out
 }
 
-// saramaSlogAdapter wraps a slog logger to satisfy the Sarama logger
-// interface. All Sarama log output is sent at Debug level.
 type saramaSlogAdapter struct {
 	logger *slog.Logger
 }
@@ -384,7 +339,6 @@ func (s *saramaSlogAdapter) Printf(format string, v ...interface{}) {
 	s.logger.Debug("sarama", slog.String("message", fmt.Sprintf(format, v...)))
 }
 
-// saramaNoopLogger discards all Sarama log output.
 type saramaNoopLogger struct{}
 
 func (saramaNoopLogger) Print(...interface{})          {}

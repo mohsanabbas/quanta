@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"quanta/internal/engine"
 	"quanta/internal/logging"
-	"quanta/source/kafka"
+
+	// Driver registration — blank imports trigger init().
+	// Add or remove drivers here to control what the binary supports.
+	_ "quanta/sink/kafka"
+	_ "quanta/sink/stdout"
+	_ "quanta/source/kafka"
 )
 
 func main() {
@@ -20,30 +24,29 @@ func main() {
 	}
 }
 
+const (
+	_defaultGRPCPort    = 7070
+	_defaultMetricsPort = 9100
+)
+
 func run() error {
 	pipelinePath := os.Getenv("QUANTA_PIPELINE_YML")
 	if pipelinePath == "" {
 		pipelinePath = "pipeline.yml"
 	}
+
 	cfg := engine.Config{
-		GRPCPort:    7070,
-		MetricsPort: 9100,
+		GRPCPort:    _defaultGRPCPort,
+		MetricsPort: _defaultMetricsPort,
 		PipelineYml: pipelinePath,
 	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	kafka.Register(kafka.Registration{
-		Name: "sarama",
-		New:  func() kafka.Adapter { return &kafka.SaramaDriver{} },
-	})
 
 	e, err := engine.Bootstrap(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("bootstrap failed: %w", err)
+		return err
 	}
-
-	if err := e.Run(ctx); err != nil {
-		return fmt.Errorf("engine run failed: %w", err)
-	}
-	return nil
+	return e.Run(ctx)
 }

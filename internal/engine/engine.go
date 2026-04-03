@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+
 	"quanta/internal/pipeline"
 	"quanta/internal/transport"
 )
@@ -14,10 +15,10 @@ type Engine struct {
 func (e *Engine) Run(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
-		e.transport.Stop()
 		if e.runner != nil {
 			_ = e.runner.Close(ctx)
 		}
+		e.transport.Stop()
 	}()
 
 	return e.transport.Serve()
