@@ -269,6 +269,10 @@ See [docs/guides/TUNING_GUIDE.md](docs/guides/TUNING_GUIDE.md) for detailed scen
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+## Author
+
+[Mohsan](https://github.com/mohsanabbas) — Software Engineer
+
 ## License
 
 Apache-2.0
