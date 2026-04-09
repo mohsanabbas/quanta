@@ -24,8 +24,9 @@ transformers:
       backoff_ms: 200
 
 sinks:
-  - stdout
-  - kafka
+  # - stdout
+  # - kafka
+  - s3
 #  kafka:
 #    brokers:
 #      - "localhost:9094"
@@ -38,6 +39,19 @@ sink_configs:
   kafka:
     brokers: ["localhost:9094"]
     topic: "quanta-output"
+  s3:
+    bucket: "quanta-output"
+    region: "us-east-1"
+    prefix: "events"
+    file_suffix: ".jsonl"
+    format: "jsonl"
+    batch_size: 10
+    flush_interval: 5s
+    auth_strategy: "static"
+    access_key_id: "test"
+    secret_access_key: "test"
+    endpoint: "http://localhost:4566"
+    path_style: true
     version: "3.6.0"
     client_id: "quanta-sink"
     acks: "all"               # none|local|all

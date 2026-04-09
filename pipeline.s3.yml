@@ -1,0 +1,36 @@
+# Pipeline config for testing S3 sink with LocalStack
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.yml
+
+transformers:
+  - name: uppercase
+    type: grpc
+    address: "localhost:50052"
+    max_in_flight: 100
+    timeout_ms: 1000
+    content_type: "application/protobuf"
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+
+sinks:
+  - stdout
+  - s3
+
+sink_configs:
+  s3:
+    bucket: quanta-output
+    region: us-east-1
+    prefix: events
+    file_suffix: .jsonl
+    batch_size: 10
+    flush_interval: 5s
+    auth_strategy: static
+    access_key_id: test
+    secret_access_key: test
+    endpoint: http://localhost:4566
+    path_style: true
