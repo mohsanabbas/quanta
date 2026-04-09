@@ -112,6 +112,59 @@ services:
     networks:
       - quanta-net
 
+  localstack:
+    image: localstack/localstack:4.4
+    container_name: quanta-localstack
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - quanta-net
+
+  s3manager:
+    image: cloudlena/s3manager
+    container_name: quanta-s3manager
+    restart: unless-stopped
+    environment:
+      ENDPOINT: localstack:4566
+      ACCESS_KEY_ID: test
+      SECRET_ACCESS_KEY: test
+      USE_SSL: "false"
+      SKIP_SSL_VERIFICATION: "true"
+    ports:
+      - "8082:8080"
+    depends_on:
+      localstack:
+        condition: service_started
+    networks:
+      - quanta-net
+
+  localstack-init:
+    image: amazon/aws-cli:latest
+    container_name: quanta-localstack-init
+    entrypoint: [ "/bin/sh", "-c" ]
+    command:
+      - |
+        echo '⏳ Waiting for LocalStack S3...'
+        until aws --endpoint-url=http://localstack:4566 s3 ls 2>/dev/null; do sleep 1; done
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://quanta-output
+        echo '✅ S3 bucket ready:'
+        aws --endpoint-url=http://localstack:4566 s3 ls
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    depends_on:
+      localstack:
+        condition: service_started
+    networks:
+      - quanta-net
+
   engine:
     image: quanta-engine:local
     container_name: quanta-engine
@@ -121,8 +174,9 @@ services:
       args:
         BIN_DIR: "bin/linux-${ARCH:-arm64}"
     environment:
-      - QUANTA_PIPELINE_YML=/config/pipeline.docker.yml
+      - QUANTA_PIPELINE_YML=/config/pipeline.docker.s3.yml
     volumes:
+      - ./pipeline.docker.s3.yml:/config/pipeline.docker.s3.yml:ro
       - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
       - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
       - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
@@ -146,3 +200,4 @@ networks:
 
 volumes:
   kafka_data:
+  localstack_data:

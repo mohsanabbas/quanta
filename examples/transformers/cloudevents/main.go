@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// eventData is the domain payload carried inside the CloudEvent data field.
 type eventData struct {
 	RequestID    string  `json:"request_id"`
 	Provider     string  `json:"provider"`
@@ -43,7 +42,6 @@ type eventData struct {
 	Environment  string  `json:"environment"`
 }
 
-// dlqEnvelope wraps an unprocessable raw event with error context.
 type dlqEnvelope struct {
 	Error       string          `json:"error"`
 	ErrorClass  string          `json:"error_class"`
@@ -52,7 +50,6 @@ type dlqEnvelope struct {
 	RawPayload  json.RawMessage `json:"raw_payload"`
 }
 
-// rawEvent mirrors the seed producer schema.
 type rawEvent struct {
 	Properties struct {
 		RequestID    string  `json:"request_id"`
@@ -135,14 +132,11 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 	statusClass := classifyStatus(strings.ToUpper(in.Properties.Status))
 	eventName := strings.ToLower(in.Context.Event)
 
-	// Route unhealthy events to DLQ — errors, timeouts, and rate-limited
-	// requests don't belong in the clean output topic.
 	if statusClass == "error" || statusClass == "throttled" {
 		reason := fmt.Sprintf("unhealthy event: status=%s class=%s", in.Properties.Status, statusClass)
 		return s.toDLQ(req.GetPayload(), "status_rejected", reason), nil
 	}
 
-	// Build CloudEvent using the official SDK.
 	ce := cloudevents.New()
 	ce.SetID(ceID)
 	ce.SetType(_typePrefix + eventName)
@@ -150,7 +144,6 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 	ce.SetSubject(in.Properties.Model)
 	ce.SetTime(occurredAt)
 
-	// Extension attributes (lowercase, ≤20 chars per spec).
 	ce.SetExtension("aiprovider", strings.ToLower(in.Properties.Provider))
 	ce.SetExtension("environment", strings.ToLower(in.Context.Environment))
 	ce.SetExtension("statusclass", statusClass)
@@ -186,7 +179,6 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 		return s.toDLQ(req.GetPayload(), "marshal_error", err.Error()), nil
 	}
 
-	// CloudEvents Kafka protocol binding headers (ce- prefix).
 	headers := map[string]string{
 		"ce-specversion": ce.SpecVersion(),
 		"ce-type":        ce.Type(),
@@ -215,7 +207,7 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 }
 
 func (s *transformerServer) toDLQ(raw []byte, errClass, errMsg string) *pb.TransformResponse {
-	// If raw is valid JSON, embed it directly; otherwise base64-encode.
+
 	var rawPayload json.RawMessage
 	if json.Valid(raw) {
 		rawPayload = raw

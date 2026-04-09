@@ -1,0 +1,32 @@
+# Pipeline config: Kafka → S3 only (Docker/LocalStack)
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.docker.yml
+
+transformers: []
+
+sinks:
+  - s3
+
+sink_configs:
+  s3:
+    bucket: quanta-output
+    region: us-east-1
+    prefix: events
+    file_suffix: .jsonl
+    batch_size: 100
+    flush_interval: 5s
+    auth_strategy: static
+    access_key_id: test
+    secret_access_key: test
+    endpoint: http://localstack:4566
+    path_style: true
+
+debug:
+  per_frame_delay_ms: 0
+  print_counter: false
+  ack_batch_size: 1
+  ack_flush_ms: 0

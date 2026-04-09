@@ -8,6 +8,7 @@ A high-performance Go streaming engine that processes events from Kafka through 
 
 - **End-to-End Semantics**: At-least-once delivery with configurable commit modes (auto or e2e)
 - **Kafka Source & Sink**: Production-ready Kafka integration with Sarama driver
+- **S3 Sink**: Batched uploads to Amazon S3 (or LocalStack) with configurable flush intervals and at-least-once delivery
 - **gRPC Transformers**: Unary RPC support with configurable retry policies
 - **Backpressure Management**: Combined byte and message count limits prevent memory overflow
 - **Context-Aware Pipeline**: Graceful shutdowns and timeout propagation throughout the stack
@@ -43,6 +44,8 @@ make docker-down
 This starts:
 - Kafka broker (Bitnami Kafka with KRaft)
 - Kafka UI (browse topics, consumers, lag)
+- LocalStack (local S3)
+- S3 Manager UI (browse S3 buckets at `http://localhost:8082`)
 - Uppercase transformer (example gRPC service)
 - Quanta engine (processes events)
 
@@ -90,13 +93,42 @@ transformers:
 
 sinks:
   - kafka                          # or stdout for debugging
+  - s3                             # batched S3 uploads
 
 sink_configs:
   kafka:
     brokers: ["localhost:9094"]
     topic: "quanta-output"
     acks: "all"
+  s3:
+    bucket: quanta-output
+    region: us-east-1
+    prefix: events
+    file_suffix: .jsonl
+    batch_size: 100
+    flush_interval: 5s
+    auth_strategy: static          # static | iam-role | env
+    access_key_id: test
+    secret_access_key: test
+    endpoint: http://localhost:4566 # optional, for LocalStack
+    path_style: true               # required for LocalStack
 ```
+
+### 3. S3 Sink Configuration
+
+The S3 sink batches records into JSONL files and uploads them to S3. It supports:
+
+| Option | Description | Default |
+|---|---|---|
+| `bucket` | S3 bucket name | (required) |
+| `region` | AWS region | (required unless endpoint set) |
+| `prefix` | Key prefix (folder) | `""` |
+| `file_suffix` | File extension | `.jsonl` |
+| `batch_size` | Records per file | `100` |
+| `flush_interval` | Max time before flush | `5s` |
+| `auth_strategy` | `static`, `iam-role`, or `env` | (required) |
+| `endpoint` | Custom endpoint (LocalStack) | `""` |
+| `path_style` | Use path-style URLs | `false` |
 
 ### 2. Kafka Source Configuration
 
@@ -241,6 +273,7 @@ source/
   kafka/               Kafka source driver (Sarama)
 sink/
   kafka/               Kafka sink
+  s3/                  S3 sink (batched JSONL uploads)
   stdout/              Debug sink
 examples/
   transformers/        Sample gRPC transformers
