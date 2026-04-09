@@ -26,7 +26,7 @@ sink_configs:
     bucket: quanta-output
     region: us-east-1
     prefix: events
-    file_suffix: .json
+    file_suffix: .jsonl
     batch_size: 10
     flush_interval: 5s
     auth_strategy: static

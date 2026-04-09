@@ -47,6 +47,11 @@ type Config struct {
 	KMSKeyID      string          `yaml:"kms_key_id"`
 }
 
+const (
+	_defaultBatchSize     = 100
+	_defaultFlushInterval = 5 * time.Second
+)
+
 func (c *Config) validate() error {
 	if c.Bucket == "" {
 		return qerr.Config("s3", "validate", errors.New("bucket name is required"))
@@ -55,10 +60,10 @@ func (c *Config) validate() error {
 		return qerr.Config("s3", "validate", errors.New("region or custom endpoint is required"))
 	}
 	if c.BatchSize <= 0 {
-		return qerr.Config("s3", "validate", errors.New("batch_size must be greater than 0"))
+		c.BatchSize = _defaultBatchSize
 	}
 	if c.FlushInterval <= 0 {
-		return qerr.Config("s3", "validate", errors.New("flush_interval must be greater than 0"))
+		c.FlushInterval = _defaultFlushInterval
 	}
 	if c.Format == "" {
 		c.Format = "jsonl"

@@ -3,24 +3,25 @@ package s3
 import (
 	"bytes"
 	"fmt"
-	"io"
 )
 
+// Encoder serializes a slice of raw records into a single body for S3 upload.
 type Encoder interface {
-	Encode(records [][]byte) (io.Reader, error)
+	Encode(records [][]byte) ([]byte, error)
 	ContentType() string
 }
 
+// jsonlEncoder encodes records as newline-delimited JSON (JSON Lines / NDJSON).
 type jsonlEncoder struct{}
 
-func (jsonlEncoder) Encode(records [][]byte) (io.Reader, error) {
+func (jsonlEncoder) Encode(records [][]byte) ([]byte, error) {
 	if len(records) == 0 {
-		return bytes.NewReader(nil), nil
+		return nil, nil
 	}
-
+	// JSONL spec: each record on its own line, terminated by \n.
 	joined := bytes.Join(records, []byte("\n"))
 	joined = append(joined, '\n')
-	return bytes.NewReader(joined), nil
+	return joined, nil
 }
 
 func (jsonlEncoder) ContentType() string { return "application/x-ndjson" }

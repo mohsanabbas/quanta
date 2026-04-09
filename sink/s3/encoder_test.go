@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,10 +44,7 @@ func TestJsonlEncoder(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := enc.Encode(tt.give)
-			require.NoError(t, err)
-
-			got, err := io.ReadAll(r)
+			got, err := enc.Encode(tt.give)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, string(got))
 			assert.Equal(t, tt.wantType, enc.ContentType())

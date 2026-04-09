@@ -114,7 +114,7 @@ sink_configs:
     path_style: true               # required for LocalStack
 ```
 
-### 3. S3 Sink Configuration
+### 2. S3 Sink Configuration
 
 The S3 sink batches records into JSONL files and uploads them to S3. It supports:
 
@@ -130,7 +130,7 @@ The S3 sink batches records into JSONL files and uploads them to S3. It supports
 | `endpoint` | Custom endpoint (LocalStack) | `""` |
 | `path_style` | Use path-style URLs | `false` |
 
-### 2. Kafka Source Configuration
+### 3. Kafka Source Configuration
 
 **Main Config** (`kafka_source.yml`):
 ```yaml

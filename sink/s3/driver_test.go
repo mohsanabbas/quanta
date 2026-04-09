@@ -98,6 +98,13 @@ func TestConfigValidate(t *testing.T) {
 				AuthStrategy: AuthIAMRole,
 			},
 		},
+		{
+			name: "batch_size and flush_interval default when zero",
+			give: Config{
+				Bucket: "b", Region: "us-east-1",
+				AuthStrategy: AuthIAMRole,
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -250,16 +257,19 @@ func newTestDriver(t *testing.T, spy *spyClient) *Driver {
 
 	pool := newBatchPool(cfg.BatchSize)
 
+	flushCtx, cancel := context.WithCancel(context.Background())
+
 	d := &Driver{
 		cfg:     cfg,
 		client:  spy,
 		encoder: enc,
 		pool:    pool,
 		current: pool.Get().(*batch),
-		sealCh:  make(chan *batch, cfg.BatchSize),
+		sealCh:  make(chan *batch, 1),
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
+		cancel:  cancel,
 	}
-	go d.flushLoop()
+	go d.flushLoop(flushCtx)
 	return d
 }
