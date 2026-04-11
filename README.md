@@ -10,6 +10,8 @@ A high-performance Go streaming engine that processes events from Kafka through 
 - **Kafka Source & Sink**: Production-ready Kafka integration with Sarama driver
 - **S3 Sink**: Batched uploads to Amazon S3 (or LocalStack) with configurable flush intervals and at-least-once delivery
 - **gRPC Transformers**: Unary RPC support with configurable retry policies
+- **Three-Path Error Handling**: Plugin `error_events` → per-transformer error sink, NackAware → engine DLQ, DeadLetterFn for infra failures
+- **Engine-Managed DLQ**: Configurable dead-letter queue sink for undeliverable frames (NackAware sinks)
 - **Backpressure Management**: Combined byte and message count limits prevent memory overflow
 - **Context-Aware Pipeline**: Graceful shutdowns and timeout propagation throughout the stack
 - **Sliding Window Checkpoints**: Efficient out-of-order acknowledgment handling
@@ -42,6 +44,7 @@ make docker-down
 ```
 
 This starts:
+
 - Kafka broker (Bitnami Kafka with KRaft)
 - Kafka UI (browse topics, consumers, lag)
 - LocalStack (local S3)
@@ -64,13 +67,13 @@ go run ./cmd/engine
 QUANTA_PIPELINE_YML=/path/to/pipeline.yml go run ./cmd/engine
 ```
 
-**Note**: For local runs, ensure Kafka is accessible at `localhost:9094` and update `pipeline.yml` accordingly.
+**Note**: For local runs, ensure Kafka is accessible at `localhost:9094` and update `topology/pipeline.yml` accordingly.
 
 ## Configuration
 
-Quanta uses a two-tier configuration approach:
+All pipeline and source configuration files live in the `topology/` directory.
 
-### 1. Pipeline Configuration (`pipeline.yml`)
+### 1. Pipeline Configuration (`topology/pipeline.yml`)
 
 Defines the data flow and component wiring:
 
@@ -80,20 +83,26 @@ schema_version: v1
 source:
   kind: kafka
   driver: sarama
-  config: kafka_source.yml        # Main Kafka config
+  config: kafka_source.yml # Main Kafka config
 
 transformers:
   - name: uppercase
     type: grpc
-    address: "localhost:50052"    # Use service name in Docker
+    address: "localhost:50052" # Use service name in Docker
     timeout_ms: 1000
     retry_policy:
       attempts: 3
       backoff_ms: 200
+    error_sink: # Optional: per-transformer error sink
+      sink: kafka
+      config:
+        brokers: ["localhost:9094"]
+        topic: "uppercase-errors"
+        acks: all
 
 sinks:
-  - kafka                          # or stdout for debugging
-  - s3                             # batched S3 uploads
+  - kafka # or stdout for debugging
+  - s3 # batched S3 uploads
 
 sink_configs:
   kafka:
@@ -107,49 +116,61 @@ sink_configs:
     file_suffix: .jsonl
     batch_size: 100
     flush_interval: 5s
-    auth_strategy: static          # static | iam-role | env
+    auth_strategy: static # static | iam-role | env
     access_key_id: test
     secret_access_key: test
     endpoint: http://localhost:4566 # optional, for LocalStack
-    path_style: true               # required for LocalStack
+    path_style: true # required for LocalStack
+
+dlq: # Engine-managed dead-letter queue
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["localhost:9094"]
+    topic: "quanta-engine-dlq"
+    acks: all
+  include_original_headers: true
+  include_error_metadata: true
 ```
 
 ### 2. S3 Sink Configuration
 
 The S3 sink batches records into JSONL files and uploads them to S3. It supports:
 
-| Option | Description | Default |
-|---|---|---|
-| `bucket` | S3 bucket name | (required) |
-| `region` | AWS region | (required unless endpoint set) |
-| `prefix` | Key prefix (folder) | `""` |
-| `file_suffix` | File extension | `.jsonl` |
-| `batch_size` | Records per file | `100` |
-| `flush_interval` | Max time before flush | `5s` |
-| `auth_strategy` | `static`, `iam-role`, or `env` | (required) |
-| `endpoint` | Custom endpoint (LocalStack) | `""` |
-| `path_style` | Use path-style URLs | `false` |
+| Option           | Description                    | Default                        |
+| ---------------- | ------------------------------ | ------------------------------ |
+| `bucket`         | S3 bucket name                 | (required)                     |
+| `region`         | AWS region                     | (required unless endpoint set) |
+| `prefix`         | Key prefix (folder)            | `""`                           |
+| `file_suffix`    | File extension                 | `.jsonl`                       |
+| `batch_size`     | Records per file               | `100`                          |
+| `flush_interval` | Max time before flush          | `5s`                           |
+| `auth_strategy`  | `static`, `iam-role`, or `env` | (required)                     |
+| `endpoint`       | Custom endpoint (LocalStack)   | `""`                           |
+| `path_style`     | Use path-style URLs            | `false`                        |
 
 ### 3. Kafka Source Configuration
 
-**Main Config** (`kafka_source.yml`):
+**Main Config** (`topology/kafka_source.yml`):
+
 ```yaml
 schema_version: v1
 brokers: ["localhost:9094"]
 topics: ["input-topic"]
 group_id: "quanta-consumer"
-start_from: "newest"              # oldest|newest
-commit_mode: "e2e"                # auto|e2e
+start_from: "newest" # oldest|newest
+commit_mode: "e2e" # auto|e2e
 version: "3.6.0"
 ```
 
-**Tuning Config** (`kafka_source.tuning.yml` - optional):
+**Tuning Config** (`topology/kafka_source.tuning.yml` - optional):
+
 ```yaml
-inflight_bytes: 268435456         # 256 MiB
-inflight_msgs: 4096               # Concurrent messages
-window_bits: 8192                 # Checkpoint window (≥ inflight_msgs)
-commit_interval: 5s               # Time-based commits
-commit_step: 500                  # Offset-based commits
+inflight_bytes: 268435456 # 256 MiB
+inflight_msgs: 4096 # Concurrent messages
+window_bits: 8192 # Checkpoint window (≥ inflight_msgs)
+commit_interval: 5s # Time-based commits
+commit_step: 500 # Offset-based commits
 ```
 
 The tuning file is **automatically loaded** by inserting `.tuning` before the extension.
@@ -179,7 +200,7 @@ docker-compose up -d
 ## Developer Commands
 
 | Command                        | Description                         |
-|--------------------------------|-------------------------------------|
+| ------------------------------ | ----------------------------------- |
 | `make build`                   | Build all Go modules for current OS |
 | `make build-linux ARCH=arm64`  | Cross-compile for Linux (Docker)    |
 | `make docker-build ARCH=arm64` | Build Docker images                 |
@@ -194,19 +215,24 @@ docker-compose up -d
 ## Documentation
 
 ### Specifications
+
 - [Architecture Overview](docs/specs/architecture.md)
 - [Configuration Management](docs/specs/configuration.md)
 - [Source Specification](docs/specs/source.md)
 - [Sink Specification](docs/specs/sink.md)
 - [E2E Semantics](docs/specs/e2e-semantics.md)
 - [Error Handling](docs/specs/error-handling.md)
+- [Error Ownership](docs/specs/error-ownership.md)
+- [Sink Nack & DLQ Design](docs/specs/sink-nack-dlq.md)
 
 ### Guides
+
 - [Tuning Guide](docs/guides/TUNING_GUIDE.md) - Performance tuning and scenarios
 - [Bug Fixes](docs/guides/BUGFIXES.md) - Recent fixes and improvements
 - [Tuning Loading Flow](docs/guides/TUNING_LOADING_FLOW.md) - How configuration is loaded
 
 ### Configuration Reference
+
 - [CONFIGS.md](CONFIGS.md) - Complete YAML schema reference
 
 ## Troubleshooting
@@ -214,6 +240,7 @@ docker-compose up -d
 ### Common Issues
 
 **Architecture Mismatch**
+
 ```bash
 # Ensure binaries match container architecture
 make build-linux ARCH=arm64  # For Apple Silicon
@@ -221,25 +248,29 @@ make build-linux ARCH=amd64  # For Intel/AMD
 ```
 
 **Kafka Connection Issues**
+
 - Docker: Use service names (`kafka:29092`)
 - Host: Use `localhost:9094` or `host.docker.internal:9094`
 - Check `docker-compose logs kafka` for broker logs
 
 **Processing Stalls / Stuck Partitions**
+
 ```yaml
-# Increase commit frequency in kafka_source.tuning.yml
-commit_interval: 2s      # Down from 5s
-commit_step: 100         # Down from 500
+# Increase commit frequency in topology/kafka_source.tuning.yml
+commit_interval: 2s # Down from 5s
+commit_step: 100 # Down from 500
 ```
 
 **High Memory Usage**
+
 ```yaml
-# Reduce in-flight limits in kafka_source.tuning.yml
-inflight_bytes: 134217728  # 128 MiB
+# Reduce in-flight limits in topology/kafka_source.tuning.yml
+inflight_bytes: 134217728 # 128 MiB
 inflight_msgs: 2000
 ```
 
 **Shutdown Panic (Fixed)**
+
 - Recent fix addresses semaphore release issues
 - Update to latest version if experiencing crashes on Ctrl+C
 
@@ -247,11 +278,11 @@ inflight_msgs: 2000
 
 ```bash
 # Enable verbose Sarama logging
-# In kafka_source.yml:
+# In topology/kafka_source.yml:
 sarama_verbose: true
 
 # Use stdout sink for debugging
-# In pipeline.yml:
+# In topology/pipeline.yml:
 sinks:
   - stdout
 
@@ -280,17 +311,20 @@ examples/
 docs/
   specs/               Technical specifications
   guides/              User guides and tutorials
+topology/              Pipeline & source YAML configs
 ```
 
 ## Commit Modes
 
 ### Auto Mode (High Throughput)
+
 - Offsets marked immediately after emit
 - Fast processing, fire-and-forget
 - ⚠️ Some message loss possible on crash
 - Use when: Speed > safety
 
 ### E2E Mode (At-Least-Once)
+
 - Offsets committed after sink acknowledgment
 - Guaranteed delivery
 - Handles out-of-order acks with sliding window

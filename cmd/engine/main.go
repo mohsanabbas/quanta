@@ -33,7 +33,7 @@ const (
 func run() error {
 	pipelinePath := os.Getenv("QUANTA_PIPELINE_YML")
 	if pipelinePath == "" {
-		pipelinePath = "pipeline.yml"
+		pipelinePath = "topology/pipeline.yml"
 	}
 
 	cfg := engine.Config{

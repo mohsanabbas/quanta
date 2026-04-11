@@ -1,17 +1,18 @@
 # How Tuning Files Are Loaded - Complete Flow
 
-##  Quick Answer
+## Quick Answer
 
-**WHO:** The `LoadConfig()` function in `source/kafka/config.go`  
-**WHEN:** During pipeline compilation/bootstrap  
-**WHERE:** Automatically alongside the main config file  
-**HOW:** By inserting `.tuning` before the file extension  
+**WHO:** The `LoadConfig()` function in `source/kafka/config.go`
+**WHEN:** During pipeline compilation/bootstrap
+**WHERE:** Automatically alongside the main config file
+**HOW:** By inserting `.tuning` before the file extension
 
 ---
 
-##  Complete Loading Flow
+## Complete Loading Flow
 
 ### 1. Engine Starts
+
 ```
 cmd/engine/main.go
   └─> Reads QUANTA_PIPELINE_YML environment variable
@@ -19,6 +20,7 @@ cmd/engine/main.go
 ```
 
 ### 2. Pipeline Compilation
+
 ```go
 // internal/pipeline/compiler.go:17
 func Compile(ctx context.Context, path string) (*Runner, error) {
@@ -31,25 +33,27 @@ func Compile(ctx context.Context, path string) (*Runner, error) {
 ```
 
 ### 3. Load Pipeline Spec
+
 ```go
 // internal/pipeline/compiler.go:23
 func LoadYAML(ctx context.Context, path string, r *Runner) error {
     registerBuiltins()
-    
+
     // Load pipeline.docker.yml
     cfg, err := config.LoadPipelineSpec(path)
     if err != nil {
         return err
     }
-    
+
     // cfg.Source.Config = "kafka_source.docker.yml"
     // cfg.Source.ResolvedConfigPath() = "/config/kafka_source.docker.yml"
-    
+
     // ...
 }
 ```
 
 ### 4. Load Kafka Config (Main + Tuning)
+
 ```go
 // internal/pipeline/compiler.go:37
 kc, err := config.LoadKafkaConfig(cfg.Source.ResolvedConfigPath())
@@ -59,6 +63,7 @@ if err != nil {
 ```
 
 This calls:
+
 ```go
 // internal/config/kafka.go:7
 func LoadKafkaConfig(path string) (kcfg.Config, error) {
@@ -66,24 +71,25 @@ func LoadKafkaConfig(path string) (kcfg.Config, error) {
 }
 ```
 
-### 5. The Magic Happens Here! 
+### 5. The Magic Happens Here!
+
 ```go
 // source/kafka/config.go:89
 func LoadConfig(path string) (Config, error) {
     var cfg Config
-    
+
     // Load main config (kafka_source.docker.yml)
     public, err := loadPublicConfig(path)
     if err != nil {
         return cfg, err
     }
-    
+
     // Load tuning config (kafka_source.docker.tuning.yml) ← AUTOMATIC!
     tuning, err := loadTuningConfig(path)
     if err != nil {
         return cfg, err
     }
-    
+
     cfg.public = public
     cfg.tuning = tuning
     return cfg, nil
@@ -91,17 +97,18 @@ func LoadConfig(path string) (Config, error) {
 ```
 
 ### 6. Loading Tuning Config
+
 ```go
 // source/kafka/config.go:124
 func loadTuningConfig(publicPath string) (Tuning, error) {
     k := koanf.New(".")
-    
+
     // Derive tuning path from main config path
     if publicPath != "" {
         tuningPath := deriveTuningPath(publicPath)
         // publicPath: "/config/kafka_source.docker.yml"
         // tuningPath: "/config/kafka_source.docker.tuning.yml"
-        
+
         // Check if tuning file exists
         if _, err := os.Stat(tuningPath); err == nil {
             // Load the tuning file
@@ -113,31 +120,32 @@ func loadTuningConfig(publicPath string) (Tuning, error) {
         }
         // If file doesn't exist, that's OK - defaults will be used
     }
-    
+
     // Allow environment variables to override
     // QUANTA_TUNING__INFLIGHT_MSGS=8000 → inflight_msgs: 8000
     if err := k.Load(env.Provider("QUANTA_TUNING__", "__", tuningEnvKey), nil); err != nil {
         return Tuning{}, err
     }
-    
+
     var tuning Tuning
     if err := k.Unmarshal("", &tuning); err != nil {
         return tuning, err
     }
-    
+
     // Apply defaults for any missing values
     applyTuningDefaults(&tuning)
-    
+
     // Validate the tuning parameters
     if err := validateTuning(tuning); err != nil {
         return tuning, err
     }
-    
+
     return tuning, nil
 }
 ```
 
 ### 7. Path Derivation Logic
+
 ```go
 // source/kafka/config.go:163
 func deriveTuningPath(publicPath string) string {
@@ -146,7 +154,7 @@ func deriveTuningPath(publicPath string) string {
     }
     ext := filepath.Ext(publicPath)
     base := strings.TrimSuffix(publicPath, ext)
-    
+
     if ext == "" {
         return base + ".tuning"
     }
@@ -160,12 +168,12 @@ func deriveTuningPath(publicPath string) string {
 | `/config/kafka_source.docker.yml` | `/config/kafka_source.docker.tuning.yml` |
 | `/config/kafka_source.docker.auto.yml` | `/config/kafka_source.docker.auto.tuning.yml` |
 | `kafka_source.yml` | `kafka_source.tuning.yml` |
-| `config/prod.yaml` | `config/prod.tuning.yaml` |
+| `topology/prod.yaml` | `topology/prod.tuning.yaml` |
 | `myconfig` | `myconfig.tuning` |
 
 ---
 
-##  Visual Flow Diagram
+## Visual Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -262,18 +270,18 @@ func deriveTuningPath(publicPath string) string {
 
 ---
 
-##  File Locations in Docker Container
+## File Locations in Docker Container
 
 When engine runs in Docker, the volumes are mounted:
 
 ```yaml
 # docker-compose.yml
 volumes:
-  - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
-  - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
+  - ./topology:/config:ro
 ```
 
 **Inside Container:**
+
 ```
 /config/
   ├── pipeline.docker.yml              ← Entry point
@@ -283,16 +291,20 @@ volumes:
 
 ---
 
-##  Key Points
+## Key Points
 
 ### 1. **Automatic Discovery**
+
 You never specify the tuning file path. The system automatically derives it:
+
 ```go
 "/config/kafka_source.docker.yml" → "/config/kafka_source.docker.tuning.yml"
 ```
 
 ### 2. **Optional**
+
 If the tuning file doesn't exist, it's not an error. Defaults are applied:
+
 ```go
 if _, err := os.Stat(tuningPath); err == nil {
     // Load it
@@ -303,6 +315,7 @@ if _, err := os.Stat(tuningPath); err == nil {
 ```
 
 ### 3. **Environment Override Priority**
+
 ```
 1. Defaults (lowest priority)
    ↓
@@ -313,20 +326,22 @@ if _, err := os.Stat(tuningPath); err == nil {
 ```
 
 ### 4. **Must Be Mounted in Docker**
-For Docker deployments, BOTH files must be in volumes:
+
+For Docker deployments, mount the `topology/` directory:
+
 ```yaml
 volumes:
-  - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
-  - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
+  - ./topology:/config:ro
 ```
 
 ---
 
-##  Verification
+## Verification
 
 ### Check What Gets Loaded
 
 Add this to `source/kafka/config.go` after line 99:
+
 ```go
 func LoadConfig(path string) (Config, error) {
     var cfg Config
@@ -338,7 +353,7 @@ func LoadConfig(path string) (Config, error) {
     if err != nil {
         return cfg, err
     }
-    
+
     // DEBUG: Print what was loaded
     fmt.Printf("DEBUG: Loaded config from: %s\n", path)
     fmt.Printf("DEBUG: Tuning path derived: %s\n", deriveTuningPath(path))
@@ -348,7 +363,7 @@ func LoadConfig(path string) (Config, error) {
     fmt.Printf("  - window_bits: %d\n", tuning.WindowBits)
     fmt.Printf("  - commit_interval: %s\n", tuning.CommitInterval)
     fmt.Printf("  - commit_step: %d\n", tuning.CommitStep)
-    
+
     cfg.public = public
     cfg.tuning = tuning
     return cfg, nil
@@ -356,6 +371,7 @@ func LoadConfig(path string) (Config, error) {
 ```
 
 Then run:
+
 ```bash
 docker-compose down
 docker-compose build engine
@@ -363,6 +379,7 @@ docker-compose up engine
 ```
 
 You'll see:
+
 ```
 DEBUG: Loaded config from: /config/kafka_source.docker.yml
 DEBUG: Tuning path derived: /config/kafka_source.docker.tuning.yml
@@ -376,7 +393,7 @@ DEBUG: Tuning values:
 
 ---
 
-##  Summary
+## Summary
 
 **Loading happens in this order:**
 
@@ -391,5 +408,5 @@ DEBUG: Tuning values:
 9. **Combined Config returned** → Contains both public and tuning
 10. **Driver configured** → Uses the combined config
 
-**The key function:** `loadTuningConfig()` in `source/kafka/config.go:124`  
+**The key function:** `loadTuningConfig()` in `source/kafka/config.go:124`
 **The derivation logic:** `deriveTuningPath()` in `source/kafka/config.go:163`
