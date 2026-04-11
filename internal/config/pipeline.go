@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -88,8 +87,7 @@ func LoadPipelineSpec(path string) (PipelineConfig, error) {
 		cfg.SchemaVersion = SupportedPipelineSchema
 	}
 	if cfg.SchemaVersion != SupportedPipelineSchema {
-		return cfg, qerr.Config("pipeline", "validate",
-			fmt.Errorf("schema_version %q not supported (want %q)", cfg.SchemaVersion, SupportedPipelineSchema))
+		return cfg, qerr.Config("pipeline", "validate", errors.New("unsupported schema_version"))
 	}
 
 	if cfg.SinkConfigs == nil {
@@ -143,24 +141,20 @@ func (c PipelineConfig) validate() error {
 	if c.Source.Config == "" && c.Source.Inline.Node == nil {
 		return qerr.Config("pipeline", "validate", errors.New("source.config or source.inline required"))
 	}
-	for i, t := range c.Transformers {
+	for _, t := range c.Transformers {
 		if t.Name == "" {
-			return qerr.Config("pipeline", "validate",
-				fmt.Errorf("transformers[%d].name required", i))
+			return qerr.Config("pipeline", "validate", errors.New("transformer name required"))
 		}
 		if t.Type == "" {
-			return qerr.Config("pipeline", "validate",
-				fmt.Errorf("transformers[%d].type required", i))
+			return qerr.Config("pipeline", "validate", errors.New("transformer type required"))
 		}
 		switch t.Type {
 		case "grpc":
 			if t.Address == "" {
-				return qerr.Config("pipeline", "validate",
-					fmt.Errorf("transformers[%d].address required for grpc", i))
+				return qerr.Config("pipeline", "validate", errors.New("transformer address required for grpc"))
 			}
 		default:
-			return qerr.Config("pipeline", "validate",
-				fmt.Errorf("unsupported transformer type %q", t.Type))
+			return qerr.Config("pipeline", "validate", errors.New("unsupported transformer type"))
 		}
 	}
 	return nil

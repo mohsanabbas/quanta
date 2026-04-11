@@ -37,12 +37,10 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 	d.tuning = tun
 
 	if tun.WindowBits < _minWindowBits {
-		return qerr.Config("kafka", "validate",
-			fmt.Errorf("window_bits (%d) must be >= %d", tun.WindowBits, _minWindowBits))
+		return qerr.Config("kafka", "validate", errors.New("window_bits below minimum"))
 	}
 	if int64(tun.WindowBits) < tun.InFlightMsgs {
-		return qerr.Config("kafka", "validate",
-			fmt.Errorf("inflight_msgs (%d) must be <= window_bits (%d)", tun.InFlightMsgs, tun.WindowBits))
+		return qerr.Config("kafka", "validate", errors.New("inflight_msgs must be <= window_bits"))
 	}
 
 	d.baseAttrs = []slog.Attr{

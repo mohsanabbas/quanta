@@ -155,12 +155,12 @@ func (pp *partitionProcessor) Shutdown() {
 	close(pp.stopCh)
 	pp.wg.Wait()
 
-	_ = pp.checkpointMgr.Reset()
-
 	if pp.checkpointMgr.Initialized() {
 		base := pp.checkpointMgr.Base()
 		if base >= 0 && pp.commitStrategy != nil {
-			pp.commitStrategy.MarkAndCommit(pp.session, pp.topic, pp.partition, base)
+			pp.commitStrategy.Flush(pp.session, pp.topic, pp.partition, base)
 		}
 	}
+
+	_ = pp.checkpointMgr.Reset()
 }

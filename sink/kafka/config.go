@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	qerr "quanta/internal/errors"
@@ -55,7 +54,7 @@ func (c *Config) validateAndDefault() error {
 	switch c.Acks {
 	case _acksNone, _acksLocal, _acksAll:
 	default:
-		return qerr.Config("kafka-sink", "validate", fmt.Errorf("invalid acks %q (want: none|local|all)", c.Acks))
+		return qerr.Config("kafka-sink", "validate", errors.New("unsupported acks value"))
 	}
 	if c.Compression == "" {
 		c.Compression = _compressionNone
@@ -63,7 +62,7 @@ func (c *Config) validateAndDefault() error {
 	switch c.Compression {
 	case "none", "gzip", "snappy", "lz4", "zstd":
 	default:
-		return qerr.Config("kafka-sink", "validate", fmt.Errorf("invalid compression %q", c.Compression))
+		return qerr.Config("kafka-sink", "validate", errors.New("unsupported compression"))
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = _defaultTimeout

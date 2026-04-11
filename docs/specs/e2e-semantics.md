@@ -1,12 +1,65 @@
 # E2E Offset Commit Semantics
 
-| Scenario | Current Behaviour | Target Policy |
-|----------|-------------------|---------------|
-| Transform OK → Sink OK | Offsets committed after sink acknowledgement. | Keep. |
-| Transform returns error | Runner retries per stage policy, then acknowledges after exhaustion (no commit). | Commit only after sink success; retry budget remains. |
-| Sink returns error | Runner propagates error; source stops; offset not committed. | Retry sink publish, send to DLQ if configured, commit only after success. |
-| Transformer DROP | Frame acknowledged immediately; offset committed. | Keep. |
-| Context cancellation | No commit; outstanding frames dropped. | Keep. |
+## Commit Authority
 
-Tests under `internal/e2e` capture the current behaviour. Deviations from the planned policy are documented; implementing sink retry/DLQ is future work.
+The `AckCoordinator` is the **sole commit authority**. No component ever interacts with the source checkpoint directly — all commits flow through coordinator barriers.
 
+## Scenario Matrix
+
+| Scenario                        | Behaviour                                                                                                                                              | Commit?          | Notes                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------ |
+| Transform OK → All sinks ack    | Barrier refs reach 0, CAS `Live→Committed`                                                                                                             | **Yes**          | Standard happy path.                                                                 |
+| Transform returns error         | Runner retries per stage policy. On exhaustion, `Fail()` dead-letters the frame. If all derived frames are dropped, `CommitNow()` advances the offset. | **Conditional**  | Offset advances only when nothing reaches sinks, or when surviving barriers resolve. |
+| Sink publish error              | `barrier.Abort()` prevents commit. `Fail()` invokes the dead-letter handler.                                                                           | **No**           | Offset stays; source will redeliver.                                                 |
+| AckAware sink confirms delivery | Sink calls `coord.Ack(tok)` → barrier `release()` decrements refs.                                                                                     | **When refs=0**  | Each sink acks independently.                                                        |
+| Transformer DROP                | No derived frames → `CommitNow(tok)` immediately.                                                                                                      | **Yes**          | Treated as successful filter.                                                        |
+| Fan-out (N frames × M sinks)    | Barrier created with `refs = N×M + 1`. Each sink ack decrements. Sync sinks call `Complete()`.                                                         | **When all ack** | Single barrier covers entire fan-out.                                                |
+| Context cancellation            | Outstanding barriers abandoned, no commit.                                                                                                             | **No**           | Shutdown safety.                                                                     |
+
+## Coordinator Flow
+
+```mermaid
+sequenceDiagram
+  participant Source
+  participant Runner
+  participant Coord as AckCoordinator
+  participant Sink as AckAware Sink
+  participant DLQ as DeadLetterFn
+
+  Source->>Runner: emit(ctx, frame)
+  Runner->>Runner: transform chain → N frames
+
+  alt N = 0 (all dropped)
+    Runner->>Coord: CommitNow(tok)
+    Coord->>Source: commit offset
+  else N > 0
+    Runner->>Coord: Barrier(tok, refs)
+    Runner->>Sink: Publish(frame₁..frameₙ)
+
+    alt publish succeeds
+      Sink-->>Coord: Ack(tok) × N
+      Note over Coord: refs=0 → commit
+      Coord->>Source: commit offset
+    else publish fails
+      Runner->>Coord: barrier.Abort()
+      Runner->>Coord: Fail(stage, frame, err)
+      Coord->>DLQ: dead-letter
+      Note over Coord: no commit
+    end
+  end
+```
+
+## Barrier Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> Live : Barrier(tok, refs)
+  Live --> Committed : all refs released (CAS)
+  Live --> Aborted : publishAll fails (CAS)
+  Committed --> [*] : offset committed
+  Aborted --> [*] : offset withheld
+```
+
+## Duplicate Delivery
+
+If the source redelivers a frame whose barrier is still outstanding, the coordinator force-aborts the stale barrier and creates a fresh one. This prevents resource leaks from abandoned barriers.

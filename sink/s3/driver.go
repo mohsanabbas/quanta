@@ -21,7 +21,6 @@ import (
 	"quanta/sink"
 )
 
-// Client abstracts the S3 API surface needed by Driver.
 type Client interface {
 	PutObject(ctx context.Context, params *s3svc.PutObjectInput, optFns ...func(*s3svc.Options)) (*s3svc.PutObjectOutput, error)
 }
@@ -31,9 +30,6 @@ var (
 	_ sink.AckAware = (*Driver)(nil)
 )
 
-// Driver implements sink.Adapter and sink.AckAware for Amazon S3.
-// It batches records, encodes them via a pluggable Encoder, uploads to S3,
-// and acks checkpoint tokens only after a successful upload.
 type Driver struct {
 	cfg     Config
 	client  Client
@@ -43,14 +39,12 @@ type Driver struct {
 
 	mu      sync.Mutex
 	current *batch
-	sealCh  chan *batch // sealed full batches ready for upload
+	sealCh  chan *batch
 	stopCh  chan struct{}
 	doneCh  chan struct{}
 	cancel  context.CancelFunc
 }
 
-// Configure initialises the S3 client, encoder, batch pool and starts the
-// background flush goroutine.
 func (d *Driver) Configure(ctx context.Context, raw any) error {
 	var cfg Config
 	switch v := raw.(type) {
@@ -85,9 +79,6 @@ func (d *Driver) Configure(ctx context.Context, raw any) error {
 
 	pool := newBatchPool(cfg.BatchSize)
 
-	// Derive a cancellable context that inherits values (tracing, logging)
-	// but does not cancel when the parent does.  The cancel func is stored
-	// so Close can interrupt hung PutObject calls.
 	flushCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	d.cfg = cfg
@@ -123,9 +114,6 @@ func (d *Driver) Publish(_ context.Context, f *pb.Frame) error {
 	return nil
 }
 
-// Close signals the flush goroutine to drain remaining batches, waits
-// for it to finish, then cancels the flush context so any hung PutObject
-// calls are interrupted.
 func (d *Driver) Close(ctx context.Context) error {
 	close(d.stopCh)
 	select {
@@ -153,7 +141,7 @@ func newS3Client(ctx context.Context, cfg *Config) (*s3svc.Client, error) {
 			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
 		))
 	case AuthIAMRole, AuthEnvVars:
-		// Default credential chain handles these.
+		// use default credentials
 	}
 
 	ac, err := awscfg.LoadDefaultConfig(ctx, opts...)
@@ -216,8 +204,6 @@ func (d *Driver) flushPartial(ctx context.Context) {
 	d.uploadBatch(ctx, partial)
 }
 
-// uploadBatch encodes a batch, uploads to S3, and acks checkpoint tokens
-// on success.
 func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 	records := b.records[:b.len()]
 	checkpoints := b.checkpoints[:b.len()]
@@ -225,6 +211,7 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 	data, err := d.encoder.Encode(records)
 	if err != nil {
 		logging.L().WarnContext(ctx, "s3 sink: encode", "error", err)
+		d.ackAll(checkpoints)
 		d.recycleBatch(b)
 		return
 	}
@@ -239,20 +226,24 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 	})
 	if err != nil {
 		logging.L().WarnContext(ctx, "s3 sink: upload", "error", err, "key", key)
+		d.ackAll(checkpoints)
 		d.recycleBatch(b)
 		return
 	}
 
-	if d.ack != nil {
-		for _, tok := range checkpoints {
-			d.ack(tok)
-		}
-	}
-
+	d.ackAll(checkpoints)
 	d.recycleBatch(b)
 }
 
-// objectKey builds a slash-safe S3 key from the configured prefix.
+func (d *Driver) ackAll(checkpoints []*pb.CheckpointToken) {
+	if d.ack == nil {
+		return
+	}
+	for _, tok := range checkpoints {
+		d.ack(tok)
+	}
+}
+
 func (d *Driver) objectKey() string {
 	name := fmt.Sprintf("%d_data%s", time.Now().UnixNano(), d.cfg.FileSuffix)
 	prefix := strings.TrimRight(d.cfg.Prefix, "/")

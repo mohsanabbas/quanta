@@ -1,7 +1,7 @@
 package kafka
 
 import (
-	"fmt"
+	"errors"
 
 	qerr "quanta/internal/errors"
 )
@@ -31,7 +31,7 @@ func Lookup(name string) (Registration, bool) {
 func NewAdapter(name string) (Adapter, error) {
 	reg, ok := _registry[name]
 	if !ok {
-		return nil, qerr.Source("kafka", "create", fmt.Errorf("unsupported driver %q", name))
+		return nil, qerr.Source("kafka", "create", errors.New("unsupported driver"))
 	}
 	return reg.New(), nil
 }

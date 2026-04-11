@@ -1,7 +1,7 @@
 package kafka
 
 import (
-	"fmt"
+	"errors"
 	"log/slog"
 
 	qerr "quanta/internal/errors"
@@ -46,7 +46,7 @@ func NewBackpressureManager(cfg Config) (BackpressureManager, error) {
 	case BackpressureStrategyCombined:
 		return NewCombinedBackpressureManager(tun.InFlightBytes, tun.InFlightMsgs), nil
 	default:
-		return nil, qerr.Config("kafka", "backpressure", fmt.Errorf("unknown strategy: %s", strategy))
+		return nil, qerr.Config("kafka", "backpressure", errors.New("unsupported backpressure strategy"))
 	}
 }
 
@@ -64,7 +64,7 @@ func NewCheckpointManager(cfg Config) (CheckpointManager, error) {
 	case CheckpointStrategyApplicationControlled:
 		return NewApplicationControlledCheckpointManager(tun.InFlightMsgs), nil
 	default:
-		return nil, qerr.Config("kafka", "checkpoint", fmt.Errorf("unknown strategy: %s", strategy))
+		return nil, qerr.Config("kafka", "checkpoint", errors.New("unsupported checkpoint strategy"))
 	}
 }
 
@@ -84,6 +84,6 @@ func NewCommitStrategy(cfg Config, logger *slog.Logger) (CommitStrategy, error) 
 	case CommitStrategyTypeHybrid:
 		return NewHybridCommitStrategy(int64(tun.CommitStep), tun.CommitInterval, logger), nil
 	default:
-		return nil, qerr.Config("kafka", "commit", fmt.Errorf("unknown strategy: %s", strategy))
+		return nil, qerr.Config("kafka", "commit", errors.New("unsupported commit strategy"))
 	}
 }

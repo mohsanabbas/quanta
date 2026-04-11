@@ -4,7 +4,6 @@ import (
 	"math"
 	"math/bits"
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -39,26 +38,24 @@ func (p *PartitionTracker) Reset(base int64) {
 	for i := range p.window {
 		p.window[i] = 0
 	}
-	atomic.StoreInt64(&p.base, base)
+	p.base = base
 	p.initialized = true
 }
 
 func (p *PartitionTracker) Reserve(offset int64) uint32 {
-	if !p.Initialized() {
-		p.mu.Lock()
-		if !p.initialized {
-			atomic.StoreInt64(&p.base, offset)
-			p.initialized = true
-			for i := range p.window {
-				p.window[i] = 0
-			}
-			p.mu.Unlock()
-			return 0
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.initialized {
+		p.base = offset
+		p.initialized = true
+		for i := range p.window {
+			p.window[i] = 0
 		}
-		p.mu.Unlock()
+		return 0
 	}
-	base := atomic.LoadInt64(&p.base)
-	delta := offset - base
+
+	delta := offset - p.base
 	if delta < 0 || delta > math.MaxUint32 {
 		return InvalidSlot
 	}
@@ -75,13 +72,12 @@ func (p *PartitionTracker) AckOffset(offset int64) (int64, bool) {
 	if !p.initialized {
 		return p.base, false
 	}
-	base := atomic.LoadInt64(&p.base)
-	if offset < base {
-		return base, false
+	if offset < p.base {
+		return p.base, false
 	}
-	delta := offset - base
+	delta := offset - p.base
 	if delta >= int64(p.size) || delta < 0 {
-		return base, false
+		return p.base, false
 	}
 	slot := uint32(delta) //nolint:gosec // bounds-checked above: 0 <= delta < p.size (uint32)
 	word := slot / _bitsPerWord
@@ -90,19 +86,21 @@ func (p *PartitionTracker) AckOffset(offset int64) (int64, bool) {
 	oldWord := p.window[word]
 	mask := uint64(1) << bit
 	if oldWord&mask != 0 {
-		return base, false
+		return p.base, false
 	}
 
 	p.window[word] |= mask
-	newBase, advanced := p.advanceLocked(base)
+	newBase, advanced := p.advanceLocked(p.base)
 	if advanced {
-		atomic.StoreInt64(&p.base, newBase)
+		p.base = newBase
 	}
 	return newBase, advanced
 }
 
 func (p *PartitionTracker) Base() int64 {
-	return atomic.LoadInt64(&p.base)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.base
 }
 
 func (p *PartitionTracker) Initialized() bool {
@@ -123,7 +121,7 @@ func (p *PartitionTracker) advanceLocked(current int64) (int64, bool) {
 			return base, advanced
 		}
 		advanced = true
-		shift := uint(run) //nolint:gosec // run is 0..64 from TrailingZeros64
+		shift := uint(run) //nolint:gosec // run is from TrailingZeros64: [0, 64]
 		var carry uint64
 		for i := len(p.window) - 1; i >= 0; i-- {
 			next := p.window[i] << (_bitsPerWord - shift)
@@ -133,6 +131,6 @@ func (p *PartitionTracker) advanceLocked(current int64) (int64, bool) {
 				break
 			}
 		}
-		base += int64(shift) //nolint:gosec // shift is 0..64, fits int64
+		base += int64(shift) //nolint:gosec // shift ≤ 64, fits int64
 	}
 }

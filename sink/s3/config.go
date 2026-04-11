@@ -2,7 +2,6 @@ package s3
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	qerr "quanta/internal/errors"
@@ -80,7 +79,7 @@ func (c *Config) validate() error {
 	case AuthIAMRole, AuthEnvVars:
 
 	default:
-		return qerr.Config("s3", "validate", fmt.Errorf("invalid auth_strategy: %s", c.AuthStrategy))
+		return qerr.Config("s3", "validate", errors.New("unsupported auth_strategy"))
 	}
 
 	return nil

@@ -11,7 +11,11 @@ var ErrCheckpointClosed = errors.New("kafka: checkpoint manager closed")
 const (
 	_defaultCapacity = 1024
 	_spinBackoff     = 200 * time.Microsecond
+	_maxSpinBackoff  = 10 * time.Millisecond
+	_maxSpinAttempts = 500
 )
+
+var ErrWindowExhausted = errors.New("kafka: sliding window exhausted after max attempts")
 
 type SlidingWindowCheckpointManager struct {
 	tracker *PartitionTracker
@@ -35,16 +39,20 @@ func (c *SlidingWindowCheckpointManager) Track(offset int64, size int64) error {
 	if size <= 0 {
 		size = 1
 	}
+
 	backoff := _spinBackoff
-	for {
+	for attempt := 0; attempt < _maxSpinAttempts; attempt++ {
 		if c.tracker.Reserve(offset) != InvalidSlot {
-			break
+			c.acker.Track(offset, AckHandle{offset: offset, bytes: size})
+			return nil
 		}
 		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > _maxSpinBackoff {
+			backoff = _maxSpinBackoff
+		}
 	}
-
-	c.acker.Track(offset, AckHandle{offset: offset, bytes: size})
-	return nil
+	return ErrWindowExhausted
 }
 
 func (c *SlidingWindowCheckpointManager) Ack(offset int64) (AckHandle, int64, bool) {

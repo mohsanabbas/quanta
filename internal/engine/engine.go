@@ -2,9 +2,13 @@ package engine
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"quanta/internal/pipeline"
 	"quanta/internal/transport"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Engine struct {
@@ -12,14 +16,53 @@ type Engine struct {
 	runner    *pipeline.Runner
 }
 
-func (e *Engine) Run(ctx context.Context) error {
-	go func() {
-		<-ctx.Done()
-		if e.runner != nil {
-			_ = e.runner.Close(ctx)
-		}
-		e.transport.Stop()
-	}()
+const _shutdownGrace = 10 * time.Second
 
-	return e.transport.Serve()
+func (e *Engine) Run(ctx context.Context) error {
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// Worker: watch for source failure or context cancellation.
+	g.Go(func() error {
+		return e.watchLifecycle(gCtx)
+	})
+
+	// Worker: serve gRPC transport.
+	g.Go(func() error {
+		return e.transport.Serve()
+	})
+
+	err := g.Wait()
+
+	e.shutdown(ctx)
+	return err
+}
+
+func (e *Engine) watchLifecycle(ctx context.Context) error {
+	if e.runner == nil {
+		<-ctx.Done()
+		e.transport.Stop()
+		return ctx.Err()
+	}
+
+	select {
+	case <-ctx.Done():
+		e.transport.Stop()
+		return ctx.Err()
+	case err := <-e.runner.SourceErr():
+		slog.Error("engine: source terminated unexpectedly", "error", err)
+		e.transport.Stop()
+		return err
+	}
+}
+
+func (e *Engine) shutdown(ctx context.Context) {
+	if e.runner == nil {
+		return
+	}
+	slog.Warn("engine: draining pipeline")
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), _shutdownGrace)
+	defer cancel()
+	if err := e.runner.Close(closeCtx); err != nil {
+		slog.Error("engine: runner close error", "error", err)
+	}
 }

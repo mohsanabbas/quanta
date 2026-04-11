@@ -2,7 +2,7 @@ package kafka
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	pb "quanta/api/proto/v1"
 	qerr "quanta/internal/errors"
@@ -32,7 +32,7 @@ var _ source.Adapter = (*sourceAdapter)(nil)
 func (a *sourceAdapter) Configure(ctx context.Context, cfg any) error {
 	kc, ok := cfg.(*Config)
 	if !ok {
-		return qerr.Config("kafka", "configure", fmt.Errorf("expected *kafka.Config, got %T", cfg))
+		return qerr.Config("kafka", "configure", errors.New("unexpected config type"))
 	}
 	return a.driver.Configure(ctx, *kc)
 }
