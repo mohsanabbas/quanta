@@ -13,7 +13,7 @@ pipeline.docker.yml
 The tuning file is **automatically loaded** by inserting `.tuning` before the extension:
 - `kafka_source.docker.yml` → `kafka_source.docker.tuning.yml`
 - `kafka_source.yml` → `kafka_source.tuning.yml`
-- `config/prod.yaml` → `config/prod.tuning.yaml`
+- `topology/prod.yaml` → `topology/prod.tuning.yaml`
 
 ### File Structure
 
@@ -334,7 +334,7 @@ inflight_msgs: 4096
 
 ### Test 2: Auto Mode (High Throughput)
 ```bash
-# Edit pipeline.docker.yml
+# Edit topology/pipeline.docker.yml
 #   config: kafka_source.docker.auto.yml
 docker-compose down
 docker-compose up -d
@@ -347,7 +347,7 @@ docker-compose up -d
 
 ### Test 3: Safe Mode (Maximum Safety)
 ```bash
-# Edit pipeline.docker.yml
+# Edit topology/pipeline.docker.yml
 #   config: kafka_source.docker.safe.yml
 docker-compose down
 docker-compose up -d
@@ -433,8 +433,8 @@ commit_step: 500
 
 ##  Related Files
 
-- `kafka_source.recipes.yml` - Complete configuration recipes
-- `kafka_source.tuning.yml` - Tuning reference with calculations
+- `topology/kafka_source.recipes.yml` - Complete configuration recipes
+- `topology/kafka_source.tuning.yml` - Tuning reference with calculations
 - `CONFIGS.md` - General configuration guide
 - `docs/specs/source.md` - Source specification
 

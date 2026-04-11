@@ -188,18 +188,7 @@ services:
     environment:
       - QUANTA_PIPELINE_YML=/config/${QUANTA_PIPELINE_FILE:-pipeline.docker.yml}
     volumes:
-      - ./pipeline.docker.s3.yml:/config/pipeline.docker.s3.yml:ro
-      - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
-      - ./pipeline.docker.dual-dlq.yml:/config/pipeline.docker.dual-dlq.yml:ro
-      - ./pipeline.docker.dual-dlq.fail.yml:/config/pipeline.docker.dual-dlq.fail.yml:ro
-      - ./pipeline.docker.s3-dlq.yml:/config/pipeline.docker.s3-dlq.yml:ro
-      - ./pipeline.docker.s3-dlq.fail.yml:/config/pipeline.docker.s3-dlq.fail.yml:ro
-      - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
-      - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
-      - ./kafka_source.docker.auto.yml:/config/kafka_source.docker.auto.yml:ro
-      - ./kafka_source.docker.auto.tuning.yml:/config/kafka_source.docker.auto.tuning.yml:ro
-      - ./kafka_source.docker.safe.yml:/config/kafka_source.docker.safe.yml:ro
-      - ./kafka_source.docker.safe.tuning.yml:/config/kafka_source.docker.safe.tuning.yml:ro
+      - ./topology:/config:ro
     ports:
       - "9100:9100"
     depends_on:

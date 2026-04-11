@@ -42,13 +42,13 @@ A sink can implement both `AckAware` and `NackAware`. On success it calls `EmitF
 
 ### AckAware vs Synchronous Sinks
 
-| Property            | AckAware Sink                           | Synchronous Sink                               |
-| ------------------- | --------------------------------------- | ---------------------------------------------- |
-| `Publish` behaviour | Non-blocking enqueue                    | Blocking write                                 |
-| Ack mechanism       | Calls `EmitFn(tok)` on confirm          | Runner calls `barrier.Complete()` after return |
-| Nack mechanism      | Calls `NackFn(frame, err)` on failure   | Returns error from `Publish`                   |
-| Barrier refs        | `N frames × M ackAware sinks`           | `+1` for all sync sinks combined               |
-| Examples            | Kafka, S3                               | Stdout                                         |
+| Property            | AckAware Sink                         | Synchronous Sink                               |
+| ------------------- | ------------------------------------- | ---------------------------------------------- |
+| `Publish` behaviour | Non-blocking enqueue                  | Blocking write                                 |
+| Ack mechanism       | Calls `EmitFn(tok)` on confirm        | Runner calls `barrier.Complete()` after return |
+| Nack mechanism      | Calls `NackFn(frame, err)` on failure | Returns error from `Publish`                   |
+| Barrier refs        | `N frames × M ackAware sinks`         | `+1` for all sync sinks combined               |
+| Examples            | Kafka, S3                             | Stdout                                         |
 
 ## Registration
 

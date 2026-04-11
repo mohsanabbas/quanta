@@ -2,7 +2,7 @@
 
 This document describes the versioned YAML schemas for pipeline and Kafka source configurations.
 
-## pipeline.yml (schema_version: v1)
+## topology/pipeline.yml (schema_version: v1)
 
 Top-level fields:
 - **schema_version**: string (required) — currently "v1"
@@ -109,7 +109,7 @@ sink_configs:
 
 ---
 
-## kafka_source.yml (schema_version: v1)
+## topology/kafka_source.yml (schema_version: v1)
 
 Main Kafka source configuration with functional settings:
 
@@ -157,7 +157,7 @@ sarama_verbose: false
 
 ---
 
-## kafka_source.tuning.yml
+## topology/kafka_source.tuning.yml
 
 **Automatically loaded** by inserting `.tuning` before the file extension. This file is optional; if missing, defaults are applied.
 
@@ -174,7 +174,7 @@ Performance and operational tuning parameters:
 The tuning file is auto-discovered:
 - `kafka_source.yml` → `kafka_source.tuning.yml`
 - `kafka_source.docker.yml` → `kafka_source.docker.tuning.yml`
-- `config/prod.yaml` → `config/prod.tuning.yaml`
+- `topology/prod.yaml` → `topology/prod.tuning.yaml`
 
 ### Example
 
@@ -240,9 +240,7 @@ For Docker deployments, mount both main and tuning configs:
 ```yaml
 # docker-compose.yml
 volumes:
-  - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
-  - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
-  - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
+  - ./topology:/config:ro
 ```
 
 ---

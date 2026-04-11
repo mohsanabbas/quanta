@@ -15,7 +15,7 @@
 ```
 cmd/engine/main.go
   └─> Reads QUANTA_PIPELINE_YML environment variable
-      └─> Default: /config/pipeline.docker.yml
+      └─> Default: /topology/pipeline.docker.yml
 ```
 
 ### 2. Pipeline Compilation
@@ -43,7 +43,7 @@ func LoadYAML(ctx context.Context, path string, r *Runner) error {
     }
     
     // cfg.Source.Config = "kafka_source.docker.yml"
-    // cfg.Source.ResolvedConfigPath() = "/config/kafka_source.docker.yml"
+    // cfg.Source.ResolvedConfigPath() = "/topology/kafka_source.docker.yml"
     
     // ...
 }
@@ -99,8 +99,8 @@ func loadTuningConfig(publicPath string) (Tuning, error) {
     // Derive tuning path from main config path
     if publicPath != "" {
         tuningPath := deriveTuningPath(publicPath)
-        // publicPath: "/config/kafka_source.docker.yml"
-        // tuningPath: "/config/kafka_source.docker.tuning.yml"
+        // publicPath: "/topology/kafka_source.docker.yml"
+        // tuningPath: "/topology/kafka_source.docker.tuning.yml"
         
         // Check if tuning file exists
         if _, err := os.Stat(tuningPath); err == nil {
@@ -157,10 +157,10 @@ func deriveTuningPath(publicPath string) string {
 **Examples:**
 | Input Path | Tuning Path |
 |------------|-------------|
-| `/config/kafka_source.docker.yml` | `/config/kafka_source.docker.tuning.yml` |
-| `/config/kafka_source.docker.auto.yml` | `/config/kafka_source.docker.auto.tuning.yml` |
+| `/topology/kafka_source.docker.yml` | `/topology/kafka_source.docker.tuning.yml` |
+| `/topology/kafka_source.docker.auto.yml` | `/topology/kafka_source.docker.auto.tuning.yml` |
 | `kafka_source.yml` | `kafka_source.tuning.yml` |
-| `config/prod.yaml` | `config/prod.tuning.yaml` |
+| `topology/prod.yaml` | `topology/prod.tuning.yaml` |
 | `myconfig` | `myconfig.tuning` |
 
 ---
@@ -171,7 +171,7 @@ func deriveTuningPath(publicPath string) string {
 ┌─────────────────────────────────────────────────────────────────┐
 │ 1. ENGINE STARTS                                                │
 │    cmd/engine/main.go                                           │
-│    Reads: QUANTA_PIPELINE_YML=/config/pipeline.docker.yml      │
+│    Reads: QUANTA_PIPELINE_YML=/topology/pipeline.docker.yml      │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -184,7 +184,7 @@ func deriveTuningPath(publicPath string) string {
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 3. LOAD PIPELINE SPEC                                           │
-│    config.LoadPipelineSpec("/config/pipeline.docker.yml")      │
+│    config.LoadPipelineSpec("/topology/pipeline.docker.yml")      │
 │    Returns:                                                     │
 │      - cfg.Source.Config = "kafka_source.docker.yml"           │
 │      - cfg.Source.ResolvedConfigPath() = "/config/kafka_..."   │
@@ -269,8 +269,7 @@ When engine runs in Docker, the volumes are mounted:
 ```yaml
 # docker-compose.yml
 volumes:
-  - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
-  - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
+  - ./topology:/config:ro
 ```
 
 **Inside Container:**
@@ -288,7 +287,7 @@ volumes:
 ### 1. **Automatic Discovery**
 You never specify the tuning file path. The system automatically derives it:
 ```go
-"/config/kafka_source.docker.yml" → "/config/kafka_source.docker.tuning.yml"
+"/topology/kafka_source.docker.yml" → "/topology/kafka_source.docker.tuning.yml"
 ```
 
 ### 2. **Optional**
@@ -313,11 +312,10 @@ if _, err := os.Stat(tuningPath); err == nil {
 ```
 
 ### 4. **Must Be Mounted in Docker**
-For Docker deployments, BOTH files must be in volumes:
+For Docker deployments, mount the `topology/` directory:
 ```yaml
 volumes:
-  - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
-  - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
+  - ./topology:/config:ro
 ```
 
 ---
@@ -364,8 +362,8 @@ docker-compose up engine
 
 You'll see:
 ```
-DEBUG: Loaded config from: /config/kafka_source.docker.yml
-DEBUG: Tuning path derived: /config/kafka_source.docker.tuning.yml
+DEBUG: Loaded config from: /topology/kafka_source.docker.yml
+DEBUG: Tuning path derived: /topology/kafka_source.docker.tuning.yml
 DEBUG: Tuning values:
   - inflight_bytes: 268435456
   - inflight_msgs: 4096
