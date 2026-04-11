@@ -15,7 +15,7 @@ flowchart TB
     subgraph PLUGIN["Plugin Domain (Transform)"]
         direction TB
         P1["Business validation errors"]
-        P2["Schema rejection"]
+        P2["Schema rejection → error_events"]
         P3["Domain-specific dead-lettering"]
         P4["Plugin-internal retry logic"]
     end
@@ -24,8 +24,9 @@ flowchart TB
         direction TB
         E1["gRPC transport failures"]
         E2["Retry exhaustion"]
-        E3["Sink delivery failures"]
-        E4["DLQ routing for failed deliveries"]
+        E3["Sink delivery failures (Nack)"]
+        E4["DLQ sink for failed deliveries"]
+        E5["Error sink routing for plugin rejections"]
     end
 
     subgraph SOURCE["Source Domain"]
@@ -35,8 +36,8 @@ flowchart TB
         S3["Never knows why a commit happened"]
     end
 
-    PLUGIN -->|"Status_OK with DLQ envelope<br/>OR DeadLetterFn callback"| SOURCE
-    ENGINE -->|"Nack -> DLQ sink -> commit<br/>OR withhold -> redeliver"| SOURCE
+    PLUGIN -->|"error_events → error_sink<br/>OR DeadLetterFn callback"| ENGINE
+    ENGINE -->|"Nack → DLQ sink → commit<br/>OR error_sink route → commit<br/>OR withhold → redeliver"| SOURCE
 
     style PLUGIN fill:#e3f2fd,stroke:#1565c0
     style ENGINE fill:#fce4ec,stroke:#c62828
@@ -45,7 +46,7 @@ flowchart TB
 
 ---
 
-## Two Error Paths
+## Three Error Paths
 
 ### Path 1 Transform Errors (Plugin-Owned)
 
@@ -98,7 +99,69 @@ callback.
 
 ---
 
-### Path 2 Sink Errors (Engine-Owned)
+### Path 2 Plugin Error Events (Plugin-Owned, Engine-Routed)
+
+**Owner:** Plugin developer (rejection decision) + Engine operator (routing config)
+**Config:** YAML (`pipeline.yml` -> per-transformer `error_sink:` section)
+**Interface:** `TransformResponse.error_events` (proto field)
+
+When a plugin can parse a message but decides to reject it (bad schema,
+business rule violation), it returns the rejected events in the
+`error_events` field of the `TransformResponse`. The engine routes these to
+the per-transformer `error_sink` configured in the pipeline YAML.
+
+```mermaid
+sequenceDiagram
+    participant Source
+    participant Engine as Runner
+    participant Plugin as Transformer
+    participant Sink as Output Sink(s)
+    participant ESink as Error Sink
+
+    Source->>Engine: frame
+    Engine->>Plugin: Transform(request)
+    Plugin-->>Engine: Status_OK + events + error_events
+    Note over Engine: Transform succeeded
+    Engine->>Sink: Publish(valid frames)
+    Engine->>ESink: publishErrorEvents(rejected frames)
+    Sink-->>Engine: ack
+    Engine->>Source: commit ✓
+```
+
+**Key characteristics:**
+
+- The plugin returns `Status_OK` — the transform succeeded from the engine's
+  perspective, even though some events were rejected
+- `error_events` are separate from `events` — no mixing of valid and rejected
+  output in the same list
+- Each transformer can have its own `error_sink` with different destinations
+  (e.g., Kafka topic, S3 bucket)
+- If no `error_sink` is configured, error events are logged and dropped
+- Offset always commits — the message was processed, just partially rejected
+
+**Configuration:**
+
+```yaml
+transformers:
+  - name: cloudevents
+    type: grpc
+    address: localhost:50052
+    error_sink:
+      sink: kafka
+      config:
+        topic: quanta-error-events
+        brokers: ["localhost:9092"]
+```
+
+**Why separate from Path 1?** Path 1 (`DeadLetterFn`) is for infrastructure
+failures where the plugin is unreachable. Path 2 is for business rejections
+where the plugin successfully processed the message and made a deliberate
+decision to reject it. The error sink is a structured routing mechanism,
+not a last-resort callback.
+
+---
+
+### Path 3 Sink Errors (Engine-Owned)
 
 **Owner:** Engine operator
 **Config:** YAML (`pipeline.yml` -> `dlq:` section)
@@ -159,8 +222,8 @@ delivery.
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Transform Layer                          │
 │                                                                 │
-│  Plugin returns Status_OK with DLQ envelope?                    │
-│    -> Engine sees SUCCESS. Normal sink path. Plugin's decision.  │
+│  Plugin returns Status_OK with error_events?                    │
+│    -> Engine routes to error_sink. Plugin's rejection decision.  │
 │                                                                 │
 │  Plugin returns Status_ERROR / gRPC fails?                      │
 │    -> Engine calls Fail(). Frame NEVER reaches sinks.            │
@@ -168,6 +231,7 @@ delivery.
 │                                                                 │
 │  Rule: The engine does not second-guess the plugin.             │
 │        If the plugin says ERROR, the message is dead.           │
+│        If the plugin returns error_events, they go to error_sink│
 ├─────────────────────────────────────────────────────────────────┤
 │                          Sink Layer                             │
 │                                                                 │
@@ -187,16 +251,16 @@ delivery.
 
 ## Comparison Table
 
-| Aspect                   | Transform Error Path           | Sink Error Path                 |
-| ------------------------ | ------------------------------ | ------------------------------- |
-| **Owner**                | Plugin developer               | Engine operator                 |
-| **Configuration**        | Code: `SetDeadLetter(fn)`      | YAML: `dlq:` section            |
-| **Trigger**              | `Status_ERROR`, gRPC failure   | Sink `Publish()` fails          |
-| **Frame reaches sinks?** | Never                          | Yes (already transformed)       |
-| **Commit behavior**      | Always advance (deterministic) | Only on DLQ success (transient) |
-| **No handler set**       | Silent drop + advance + log    | Withhold + redeliver            |
-| **Redelivery useful?**   | No same failure on retry       | Yes infrastructure may recover  |
-| **Coordinator method**   | `Fail(stage, frame, cause)`    | `Nack(ctx, frame, cause)`       |
+| Aspect                   | Path 1: Transform Error        | Path 2: Plugin Error Events              | Path 3: Sink Error              |
+| ------------------------ | ------------------------------ | ---------------------------------------- | ------------------------------- |
+| **Owner**                | Plugin developer               | Plugin + operator                        | Engine operator                 |
+| **Configuration**        | Code: `SetDeadLetter(fn)`      | YAML: `error_sink:` per stage            | YAML: `dlq:` section            |
+| **Trigger**              | `Status_ERROR`, gRPC failure   | Plugin returns `error_events`            | Sink `Publish()` fails          |
+| **Frame reaches sinks?** | Never                          | Valid frames yes, rejected to error_sink | Yes (already transformed)       |
+| **Commit behavior**      | Always advance (deterministic) | Always advance (plugin decision)         | Only on DLQ success (transient) |
+| **No handler set**       | Silent drop + advance + log    | Error events dropped + log               | Withhold + redeliver            |
+| **Redelivery useful?**   | No same failure on retry       | No same rejection on retry               | Yes infrastructure may recover  |
+| **Coordinator method**   | `Fail(stage, frame, cause)`    | N/A (runner routes directly)             | `Nack(ctx, frame, cause)`       |
 
 ---
 
@@ -206,7 +270,8 @@ delivery.
 flowchart TD
     frame["Source Frame"] --> transform["Transform Chain"]
 
-    transform -->|"Status_OK"| sinks["Publish to Sink(s)"]
+    transform -->|"Status_OK<br/>(events only)"| sinks["Publish to Sink(s)"]
+    transform -->|"Status_OK<br/>(events + error_events)"| both["Publish events to Sink(s)<br/>+ error_events to Error Sink"]
     transform -->|"Status_DROP"| commitDrop["CommitNow ✓<br/>(intentional filter)"]
     transform -->|"Status_ERROR /<br/>gRPC failure"| fail["coord.Fail()"]
 
@@ -217,6 +282,7 @@ flowchart TD
     silent --> commitFail
 
     sinks -->|"All ack"| commitOK["Commit ✓"]
+    both -->|"All ack"| commitOK
     sinks -->|"Nack"| nackPath{"Engine DLQ<br/>configured?"}
 
     nackPath -->|Yes| dlqPub["DLQ Publish"]
@@ -226,6 +292,7 @@ flowchart TD
     dlqPub -->|Failure| withhold
 
     style sinks fill:#e8f5e9
+    style both fill:#e8f5e9
     style fail fill:#fff3e0
     style commitOK fill:#c8e6c9
     style commitDrop fill:#c8e6c9
@@ -240,22 +307,29 @@ flowchart TD
 
 ## Design Rationale
 
-1. **Two owners, two mechanisms, zero overlap.** Transform errors and sink
-   errors have different root causes, different retry semantics, and different
-   audiences. Merging them into one path forces a single commit policy on two
-   incompatible failure modes.
+1. **Three owners, three mechanisms, zero overlap.** Transform infrastructure
+   errors, plugin business rejections, and sink delivery failures have
+   different root causes, different retry semantics, and different audiences.
+   Merging them into one path forces a single commit policy on incompatible
+   failure modes.
 
 2. **Plugin authority is absolute.** If a transform says a message is invalid,
    the engine does not preserve it, retry it, or route it to an engine DLQ.
-   The plugin can route to its own DLQ (via `Status_OK` + envelope) if it
-   wants the message preserved. This is the plugin's domain decision.
+   The plugin routes rejected events via `error_events` to a configured
+   `error_sink`. This is the plugin's domain decision.
 
 3. **Engine DLQ is for infrastructure, not validation.** The `dlq:` config in
    `pipeline.yml` exists solely for frames that were valid but couldn't be
    delivered. Operators configure it to prevent pipeline stalls on broker
    outages or sink failures. It never captures transform rejections.
 
-4. **Commit semantics follow failure type.** Deterministic failures (transform)
-   always commit retrying would produce the same error. Transient failures
+4. **error_sink bridges plugin and operator.** The plugin decides what to
+   reject (`error_events`), the operator decides where rejections go
+   (`error_sink` in YAML). Neither has to know the other's implementation
+   details.
+
+5. **Commit semantics follow failure type.** Deterministic failures (transform)
+   always commit retrying would produce the same error. Plugin rejections
+   always commit the plugin made a deliberate decision. Transient failures
    (sink) withhold by default the infrastructure may recover. This prevents
    both infinite retry loops and unnecessary data loss.

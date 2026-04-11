@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -157,6 +158,101 @@ sinks: [stdout]
 				t.Fatal("expected validation error")
 			}
 			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadPipelineSpec_ErrorSinkValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		giveTransformer string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name: "error_sink with valid sink name",
+			giveTransformer: `
+transformers:
+  - name: uppercase
+    type: grpc
+    address: localhost:8081
+    error_sink:
+      sink: kafka
+      config:
+        topic: errors`,
+			wantErr: false,
+		},
+		{
+			name: "error_sink with empty sink name",
+			giveTransformer: `
+transformers:
+  - name: uppercase
+    type: grpc
+    address: localhost:8081
+    error_sink:
+      sink: ""`,
+			wantErr:         true,
+			wantErrContains: "error_sink.sink required",
+		},
+		{
+			name: "error_sink absent is ok",
+			giveTransformer: `
+transformers:
+  - name: uppercase
+    type: grpc
+    address: localhost:8081`,
+			wantErr: false,
+		},
+		{
+			name: "error_sink with sink name only, no config",
+			giveTransformer: `
+transformers:
+  - name: uppercase
+    type: grpc
+    address: localhost:8081
+    error_sink:
+      sink: stdout`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			pipe := `schema_version: v1
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.yml
+sinks: [stdout]
+` + tt.giveTransformer
+
+			if err := os.WriteFile(filepath.Join(dir, "pipeline.yml"), []byte(pipe), 0o600); err != nil {
+				t.Fatalf("write pipeline: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "kafka_source.yml"), []byte("schema_version: v1\n"), 0o600); err != nil {
+				t.Fatalf("write kafka cfg: %v", err)
+			}
+
+			_, err := LoadPipelineSpec(filepath.Join(dir, "pipeline.yml"))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				if tt.wantErrContains != "" {
+					if got := err.Error(); !strings.Contains(got, tt.wantErrContains) {
+						t.Fatalf("error %q should contain %q", got, tt.wantErrContains)
+					}
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})

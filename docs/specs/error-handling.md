@@ -2,33 +2,46 @@
 
 ## Error Classification
 
-| Stage Outcome                     | Commit Offset? | Retry?                       | Dead-Letter?     | Notes                                                                          |
-| --------------------------------- | -------------- | ---------------------------- | ---------------- | ------------------------------------------------------------------------------ |
-| Transform success → All sinks ack | Yes            | No                           | No               | Barrier refs reach 0 → `Live→Committed`.                                       |
-| Transform transient error         | No (pending)   | Yes, bounded by stage config | No               | Retried with backoff. After exhaustion → permanent failure.                    |
-| Transform permanent error         | Conditional    | No                           | Yes (engine DLQ) | `Fail()` dead-letters. If no frames survive, `CommitNow()` advances offset.    |
-| Sink publish error                | No             | No (barrier aborted)         | No               | `barrier.Abort()` prevents commit. Offset withheld; source redelivers.         |
-| AckAware sink delivery failure    | No             | Broker-level                 | No               | Pump withholds ack → barrier stays Live → offset never committed → redelivery. |
-| Transformer `DROP`                | Yes            | No                           | No               | No derived frames → `CommitNow()`.                                             |
-| Transformer routes to DLQ topic   | Yes            | No                           | Yes (plugin DLQ) | Plugin returns `Status_OK` with DLQ envelope → engine treats as success.       |
-| Context cancelled                 | No             | No                           | No               | Outstanding barriers abandoned. Shutdown safety.                               |
+| Stage Outcome                     | Commit Offset? | Retry?                       | Dead-Letter?               | Notes                                                                          |
+| --------------------------------- | -------------- | ---------------------------- | -------------------------- | ------------------------------------------------------------------------------ |
+| Transform success → All sinks ack | Yes            | No                           | No                         | Barrier refs reach 0 → `Live→Committed`.                                       |
+| Transform transient error         | No (pending)   | Yes, bounded by stage config | No                         | Retried with backoff. After exhaustion → permanent failure.                    |
+| Transform permanent error         | Conditional    | No                           | Yes (engine DLQ sink)      | `Fail()` dead-letters. If no frames survive, `CommitNow()` advances offset.    |
+| Sink publish error (sync)         | No             | No (barrier aborted)         | No                         | `barrier.Abort()` prevents commit. Offset withheld; source redelivers.         |
+| NackAware sink delivery failure   | Yes            | No                           | Yes (engine DLQ sink)      | Nack → coordinator publishes to DLQ sink → barrier completes → offset commits. |
+| AckAware sink delivery failure    | No             | Broker-level                 | No                         | Withhold ack → barrier stays Live → offset never committed → redelivery.       |
+| Plugin rejects event              | Yes            | No                           | Yes (per-stage error sink) | Plugin returns `error_events` → engine routes to configured `error_sink`.      |
+| Transformer `DROP`                | Yes            | No                           | No                         | No derived frames → `CommitNow()`.                                             |
+| Context cancelled                 | No             | No                           | No                         | Outstanding barriers abandoned. Shutdown safety.                               |
 
 ---
 
-## DLQ Ownership Model
+## Error Ownership Model
 
-> **Critical design principle:** Quanta does not own the dead-letter queue.
-> The transformer plugin owns DLQ routing decisions. The engine provides a
-> last-resort `DeadLetterFn` only for infrastructure failures.
+> See [Error Ownership](error-ownership.md) for the full three-path design.
 
-There are **two completely separate DLQ mechanisms** in Quanta, and confusing
-them leads to incorrect assumptions about offset commit behaviour.
+There are **three separate error-handling paths** in Quanta, each owned by a
+different component. See `docs/specs/error-ownership.md` for the definitive
+reference.
 
-### 1. Plugin-Owned DLQ (Business Logic)
+### 1. Plugin Error Routing (`error_events` → `error_sink`)
 
 When a transformer decides a message is invalid — bad schema, missing
-fields, rejected status — the plugin itself routes the event to a DLQ topic.
-**The engine never sees this as a failure.**
+fields, business rejection — the plugin returns the rejected events in
+`TransformResponse.error_events`. The engine routes them to the transformer's
+configured `error_sink`.
+
+```yaml
+transformers:
+  - name: cloudevents
+    type: grpc
+    address: localhost:50052
+    error_sink:
+      sink: kafka
+      config:
+        topic: quanta-error-events
+        brokers: ["localhost:9092"]
+```
 
 ```mermaid
 sequenceDiagram
@@ -36,55 +49,92 @@ sequenceDiagram
   participant Engine as Runner (Engine)
   participant Plugin as Transformer Plugin
   participant Sink as Configured Sink(s)
-  participant DLQ as DLQ Topic
+  participant ESink as Error Sink
 
   Source->>Engine: frame (invalid payload)
   Engine->>Plugin: Transform(request)
   Note over Plugin: Validates payload → invalid
-  Plugin->>Plugin: Build DLQ envelope
-  Plugin-->>Engine: TransformResponse{Status: OK, Events: [dlq_frame]}
-  Note over Engine: Status=OK → treat as success
-  Engine->>Sink: Publish(dlq_frame)
-  Note over Sink: dlq_frame has header "__topic"="quanta-dlq"
+  Plugin->>Plugin: Build error event
+  Plugin-->>Engine: TransformResponse{Status: OK, Events: [valid], ErrorEvents: [rejected]}
+  Engine->>Sink: Publish(valid frames)
+  Engine->>ESink: Publish(rejected frames)
   Sink-->>Engine: ack
   Engine->>Source: commit offset ✓
 ```
 
 **Key characteristics:**
 
-- The plugin returns `Status_OK` with a DLQ envelope as the output event
-- From the engine's perspective, the transform **succeeded** — it got a valid frame back
-- The DLQ routing happens via header-based topic override (e.g., `__topic: quanta-dlq`)
-- The sink publishes to the DLQ topic, acks, barrier completes, **offset commits**
-- The source message is **not redelivered** — it was successfully processed
+- Plugin returns `Status_OK` with valid events in `events` and rejected events in `error_events`
+- Engine routes `error_events` to the per-stage `error_sink` (configured in pipeline YAML)
+- From the engine's perspective, the transform **succeeded**
+- **Offset commits** — the message was successfully processed
+- If no `error_sink` is configured, error events are logged and dropped
 
 **Example — CloudEvents transformer:**
 
 ```go
-// The plugin decides this message is invalid and routes to DLQ
-func (s *transformerServer) toDLQ(raw []byte, errClass, errMsg string) *pb.TransformResponse {
-    envelope := dlqEnvelope{
-        Error:       errMsg,
-        ErrorClass:  errClass,
-        Transformer: _pluginName,
-        RawPayload:  rawPayload,
+func (s *transformerServer) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
+    ce, err := toCloudEvent(req.Frame.Value)
+    if err != nil {
+        // Return as error_event — engine routes to error_sink
+        return toErrorEvent(req.Frame.Value, "parse_error", err.Error()), nil
     }
-    payload, _ := json.Marshal(envelope)
+    return toSuccess(ce), nil
+}
 
-    // Route to DLQ via header-based topic override
-    headers := map[string]string{
-        "dlq-error":       errMsg,
-        "__topic":         "quanta-dlq",  // ← sink picks this up
-    }
-
+func toErrorEvent(raw []byte, errClass, errMsg string) *pb.TransformResponse {
+    envelope, _ := json.Marshal(errorEnvelope{Error: errMsg, ...})
     return &pb.TransformResponse{
-        Status: pb.Status_OK,          // ← engine sees SUCCESS
-        Events: []*pb.Event{{Value: payload, Metadata: &pb.EventMetadata{Headers: headers}}},
+        Status: pb.Status_OK,
+        ErrorEvents: []*pb.Event{{Value: envelope}},
     }
 }
 ```
 
-### 2. Engine-Owned DeadLetterFn (Infrastructure Failures)
+### 2. Engine DLQ Sink (Sink Delivery Failures)
+
+When a NackAware sink permanently fails to deliver a frame (e.g., Kafka broker
+rejects, S3 upload fails), it calls its `NackFn`. The `AckCoordinator`
+publishes the failed frame to the engine-managed DLQ sink and commits the
+offset so the source advances.
+
+```yaml
+dlq:
+  enabled: true
+  sink: kafka
+  config:
+    topic: quanta-engine-dlq
+    brokers: ["localhost:9092"]
+  include_original_headers: true
+  include_error_metadata: true
+```
+
+```mermaid
+sequenceDiagram
+  participant Source
+  participant Engine as Runner (Engine)
+  participant Sink as NackAware Sink
+  participant DLQ as Engine DLQ Sink
+
+  Source->>Engine: frame
+  Engine->>Sink: Publish(frame)
+  Sink--xEngine: Nack(frame, err)
+  Note over Engine: AckCoordinator.Nack()
+  Engine->>Engine: barrier.Abort()
+  Engine->>DLQ: Publish(dlq_frame)
+  DLQ-->>Engine: ack
+  Engine->>Source: commit offset ✓
+```
+
+**Key characteristics:**
+
+- Triggered by `NackFn` callback from NackAware sinks (Kafka, S3)
+- `AckCoordinator.Nack()` aborts the barrier, publishes to DLQ, conditionally commits
+- The DLQ sink is configured at the pipeline level (not per-transformer)
+- If no DLQ is configured, the nack withholds the offset and logs a warning
+- Offset commits after DLQ publish — the message is not redelivered
+
+### 3. Engine DeadLetterFn (Transform Infrastructure Failures)
 
 When the transform infrastructure itself fails — gRPC timeout, connection
 refused, all retries exhausted — the engine invokes `DeadLetterFn` as a
@@ -127,32 +177,38 @@ type DeadLetterFn func(stage string, frame *pb.Frame, cause error)
 
 ### Comparison
 
-| Aspect               | Plugin-Owned DLQ                               | Engine DeadLetterFn                               |
-| -------------------- | ---------------------------------------------- | ------------------------------------------------- |
-| **Who decides?**     | Transformer plugin (business logic)            | Engine (infrastructure failure)                   |
-| **When triggered?**  | Plugin validates payload and rejects it        | gRPC error / timeout after all retries            |
-| **Transform status** | `Status_OK` (success with DLQ frame)           | No response (transport failure)                   |
-| **Offset commits?**  | Yes — engine sees it as a successful transform | Conditional — depends on surviving frames         |
-| **Redelivery?**      | No — message was processed successfully        | No — engine calls `CommitNow` if nothing survived |
-| **DLQ destination**  | Plugin-chosen topic via header routing         | Caller-provided callback (external to engine)     |
-| **Sink involved?**   | Yes — DLQ frame flows through configured sinks | No — `DeadLetterFn` is a direct callback          |
+| Aspect               | Plugin Error Routing                           | Engine DLQ Sink                                | Engine DeadLetterFn                               |
+| -------------------- | ---------------------------------------------- | ---------------------------------------------- | ------------------------------------------------- |
+| **Who decides?**     | Transformer plugin (business logic)            | Engine (sink delivery failure)                 | Engine (infrastructure failure)                   |
+| **When triggered?**  | Plugin validates payload and rejects it        | NackAware sink fails to deliver                | gRPC error / timeout after all retries            |
+| **Transform status** | `Status_OK` (success with error_events)        | N/A (post-transform)                           | No response (transport failure)                   |
+| **Offset commits?**  | Yes — engine sees it as a successful transform | Yes — after DLQ publish                        | Conditional — depends on surviving frames         |
+| **Redelivery?**      | No — message was processed successfully        | No — DLQ captures the failure                  | No — engine calls `CommitNow` if nothing survived |
+| **Destination**      | Per-transformer `error_sink`                   | Pipeline-level DLQ sink                        | Caller-provided callback (external to engine)     |
+| **Sink involved?**   | Yes — error_events flow to error_sink adapter  | Yes — DLQ frame flows through DLQ sink adapter | No — `DeadLetterFn` is a direct callback          |
 
-### DLQ Flow Diagram (Combined)
+### Error Flow Diagram (Combined)
 
 ```mermaid
 flowchart TD
   frame["Source Frame"] --> transform["Transform Chain"]
 
   transform -->|"Status_OK<br/>(valid output)"| publish["publishAll → sinks"]
-  transform -->|"Status_OK<br/>(DLQ envelope)"| publish
+  transform -->|"Status_OK<br/>(error_events)"| errorSink["publishErrorEvents → error_sink"]
   transform -->|"Status_DROP"| commitNow["CommitNow(tok)"]
   transform -->|"gRPC error<br/>after retries"| fail["coord.Fail()"]
 
   publish -->|success| ackWait["Wait for sink acks"]
-  publish -->|error| abort["barrier.Abort()"]
+  publish -->|sync error| abort["barrier.Abort()"]
+  publish -->|"nack<br/>(NackAware)"| nack["coord.Nack()"]
 
   ackWait -->|"all refs=0"| commit["Commit offset ✓"]
   abort --> withhold["Offset withheld<br/>source redelivers"]
+  nack -->|"DLQ configured"| dlqPublish["DLQ sink publish"]
+  nack -->|"no DLQ"| withhold
+  dlqPublish --> commit
+
+  errorSink --> commit
 
   fail --> dlfn["DeadLetterFn callback"]
   dlfn --> commitCheck{"Any frames<br/>survived?"}
@@ -160,18 +216,22 @@ flowchart TD
   commitCheck -->|Yes| barrierWait["Surviving barrier<br/>resolves normally"]
 
   style publish fill:#e8f5e9
+  style errorSink fill:#fff3e0
   style fail fill:#ffebee
   style commit fill:#c8e6c9
   style commitNow fill:#c8e6c9
   style commitNow2 fill:#c8e6c9
   style withhold fill:#ffcdd2
   style dlfn fill:#fff3e0
+  style dlqPublish fill:#e8f5e9
+  style nack fill:#ffebee
 ```
 
-> **Rule of thumb:** If the transformer can parse the message and decide it's
-> invalid, the transformer should route it to a DLQ topic itself (returning
-> `Status_OK`). The engine's `DeadLetterFn` is only for cases where the
-> transformer was never reachable in the first place.
+> **Rule of thumb:**
+>
+> - Plugin can parse the message but rejects it → return in `error_events` (Path 1)
+> - Sink fails to deliver → NackAware sink nacks → engine DLQ (Path 2)
+> - Plugin unreachable → engine `DeadLetterFn` (Path 3)
 
 ---
 
@@ -184,7 +244,15 @@ flowchart TD
     syncPub -->|ok| syncComplete["barrier.Complete()"]
   end
 
-  subgraph "AckAware Sink (e.g., Kafka, S3)"
+  subgraph "NackAware Sink (e.g., Kafka, S3)"
+    nackPub["Publish() → enqueue"] -->|"delivery failure"| nack["Nack(frame, err)"]
+    nackPub -->|"broker confirms"| nackAck["Ack(tok)<br/>barrier.Complete()"]
+    nack --> coordNack["coord.Nack()<br/>barrier.Abort()"]
+    coordNack -->|"DLQ configured"| dlq["DLQ sink publish<br/>offset commits ✓"]
+    coordNack -->|"no DLQ"| nackWithhold["Offset withheld<br/>source redelivers"]
+  end
+
+  subgraph "AckAware-only Sink (legacy)"
     asyncPub["Publish() → enqueue"] -->|"broker confirms"| ack["Ack(tok)<br/>barrier.Complete()"]
     asyncPub -->|"broker rejects"| withhold["Withhold ack<br/>barrier stays Live"]
     withhold --> noCommit["Offset never committed<br/>source redelivers on restart"]
