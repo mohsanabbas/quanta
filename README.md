@@ -10,6 +10,8 @@ A high-performance Go streaming engine that processes events from Kafka through 
 - **Kafka Source & Sink**: Production-ready Kafka integration with Sarama driver
 - **S3 Sink**: Batched uploads to Amazon S3 (or LocalStack) with configurable flush intervals and at-least-once delivery
 - **gRPC Transformers**: Unary RPC support with configurable retry policies
+- **Three-Path Error Handling**: Plugin `error_events` → per-transformer error sink, NackAware → engine DLQ, DeadLetterFn for infra failures
+- **Engine-Managed DLQ**: Configurable dead-letter queue sink for undeliverable frames (NackAware sinks)
 - **Backpressure Management**: Combined byte and message count limits prevent memory overflow
 - **Context-Aware Pipeline**: Graceful shutdowns and timeout propagation throughout the stack
 - **Sliding Window Checkpoints**: Efficient out-of-order acknowledgment handling
@@ -90,6 +92,12 @@ transformers:
     retry_policy:
       attempts: 3
       backoff_ms: 200
+    error_sink:                    # Optional: per-transformer error sink
+      sink: kafka
+      config:
+        brokers: ["localhost:9094"]
+        topic: "uppercase-errors"
+        acks: all
 
 sinks:
   - kafka                          # or stdout for debugging
@@ -112,6 +120,16 @@ sink_configs:
     secret_access_key: test
     endpoint: http://localhost:4566 # optional, for LocalStack
     path_style: true               # required for LocalStack
+
+dlq:                               # Engine-managed dead-letter queue
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["localhost:9094"]
+    topic: "quanta-engine-dlq"
+    acks: all
+  include_original_headers: true
+  include_error_metadata: true
 ```
 
 ### 2. S3 Sink Configuration
@@ -200,6 +218,8 @@ docker-compose up -d
 - [Sink Specification](docs/specs/sink.md)
 - [E2E Semantics](docs/specs/e2e-semantics.md)
 - [Error Handling](docs/specs/error-handling.md)
+- [Error Ownership](docs/specs/error-ownership.md)
+- [Sink Nack & DLQ Design](docs/specs/sink-nack-dlq.md)
 
 ### Guides
 - [Tuning Guide](docs/guides/TUNING_GUIDE.md) - Performance tuning and scenarios

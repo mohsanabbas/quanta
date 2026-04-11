@@ -43,7 +43,7 @@ At a high level the system consists of several distributed components connected 
 
 **Transformer plugin processes** – External binaries that implement the `TransformService` defined in `transformer.proto`.  Each receives a `TransformRequest` and returns a `TransformResponse` with zero or more events and a status (OK/DROP/RETRY/ERROR).  The runner connects to each plugin via gRPC using a separate `transform.Client` instance.
 
-**Sinks** – Components that emit frames to downstream systems.  The current implementation provides a `stdout` sink  future sinks may write to Kafka, HTTP endpoints or storage services.  Each sink implements an adapter interface with methods `Configure`, `Push` and `Close`.
+**Sinks** – Components that emit frames to downstream systems.  The current implementation provides `stdout`, Kafka and S3 sinks.  Each sink implements an adapter interface with methods `Configure`, `Publish` and `Close`.
 
 **Control & Metrics** – The engine exposes a gRPC **Control** service that implements ping/deploy/pause operations and an HTTP endpoint that exposes Prometheus metrics.  Although a `Health` service is defined in the proto, it is not registered in the current server.  Control clients use these APIs to manage pipelines and monitor health indirectly via metrics.
 
@@ -67,16 +67,19 @@ Pipelines are described in YAML and parsed into a `spec.File` struct.  The schem
 
 * `schema_version` – currently `v1`.
 * `source` – defines the source type (`kafka`), driver (`sarama` or `kgo`) and configuration file.
-* `transformers` – an ordered list of transformer specifications, each with a name, type (`grpc` or `inproc`), address, timeout and retry settings.
-* `sinks` – one or more sink identifiers (e.g. `stdout`).
-* `sink_configs` and `debug` – optional configuration sections for sinks and debugging.
+* `transformers` – an ordered list of transformer specifications, each with a name, type (`grpc` or `inproc`), address, timeout and retry settings.  Each transformer may optionally declare an `error_sink` for plugin‑rejected events.
+* `sinks` – one or more sink identifiers (e.g. `stdout`, `kafka`, `s3`).
+* `sink_configs` – optional per‑sink configuration keyed by sink name.
+* `dlq` – optional engine‑level dead‑letter queue configuration (sink driver, include headers/error metadata).
+* `debug` – optional debugging knobs (per‑frame delay, counters, value printing).
 
 During compilation (`internal/pipeline/compiler.go`), the code:
 
-1. Validates the schema version and loads the Kafka config.  It instantiates the Kafka adapter and registers an ACK handler.
-2. Iterates over the list of transformers.  For each, it dials the plugin (if type is `grpc`), constructs a `transform.Client` and adds it as a stage in the runner with the specified timeout and retry/backoff.
-3. Creates sink adapters based on the sink names and their configuration.  Only the `stdout` sink is currently supported.
-4. Returns the fully configured `Runner` ready to start.
+1. **`compileSource`** – Validates the schema version and loads the Kafka config.  It instantiates the Kafka adapter and registers an ACK handler.
+2. **`compileTransformers`** – Iterates over the list of transformers.  For each, it dials the plugin (if type is `grpc`), constructs a `transform.Client` and adds it as a stage in the runner with the specified timeout and retry/backoff.  If the transformer declares an `error_sink`, the compiler instantiates and configures the error sink adapter for that stage.
+3. **`compileSinks`** – Creates sink adapters based on the sink names and their configuration.  Supported sinks: `stdout`, `kafka`, `s3`.  For `AckAware` sinks the compiler binds `coord.Ack`; for `NackAware` sinks it binds `coord.Nack`.
+4. **`compileDLQ`** – If a `dlq:` section is present and enabled, instantiates the DLQ sink adapter and calls `coord.SetDLQSink()` so the AckCoordinator can route nacked frames.
+5. Returns the fully configured `Runner` ready to start.
 
 This approach allows multiple transformers to be configured for a single pipeline.  The order in the YAML determines the order of execution: events flow through each stage sequentially.
 
@@ -113,7 +116,7 @@ The `Runner` is responsible for pulling frames from the source, applying transfo
                  +-------------+                                            
 ```
 
-**Figure 2 – Runner internal structure.**  Each incoming frame is converted into a `TransformRequest` and passed sequentially through the source adapter and each transform stage.  A `TransformStage` holds its name, a `transform.Client`, timeout and retry/backoff policy.  For each stage the runner calls the plugin via the unary `Transform` RPC  it handles statuses (OK, DROP, RETRY, ERROR) and converts returned events back into frames.  Only after a frame has successfully traversed all stages is it forwarded to sinks.  Sinks may emit an acknowledgement via a bound callback  the runner passes the resulting `CheckpointToken` back to the source adapter to commit the Kafka offset.  All acknowledgement handling happens within the engine process.
+**Figure 2 – Runner internal structure.**  Each incoming frame is converted into a `TransformRequest` and passed sequentially through the source adapter and each transform stage.  A `TransformStage` holds its name, a `transform.Client`, timeout and retry/backoff policy.  For each stage the runner calls the plugin via the unary `Transform` RPC — it handles statuses (OK, DROP, RETRY, ERROR) and converts returned events back into frames.  If the response contains `error_events`, the runner publishes them to the transformer's per‑stage error sink.  Only after a frame has successfully traversed all stages is it forwarded to sinks.  **AckAware** sinks emit acknowledgements via `EmitFn`; **NackAware** sinks signal delivery failure via `NackFn` — the AckCoordinator routes nacked frames to the engine DLQ sink.  Synchronous sinks (e.g. stdout) return from `Publish` and the runner treats the return as implicit ack.  All acknowledgement handling happens within the engine process.
 
 ## Kafka Source Adapter
 
@@ -143,7 +146,7 @@ The default implementation is a gRPC client (`GRPCClient`) that dials the plugin
 
 Transformer plugins are external processes that implement the `TransformService` defined in `transformer.proto`.  Each plugin can be written in any language that supports gRPC and Protocol Buffers.  The key RPCs are:
 
-* `Transform(TransformRequest) returns (TransformResponse)` – synchronous transform for individual events or batched requests.  The request includes the pipeline ID, plugin ID, payload and event metadata  the response returns zero or more events and a status (OK/DROP/RETRY/ERROR).
+* `Transform(TransformRequest) returns (TransformResponse)` – synchronous transform for individual events or batched requests.  The request includes the pipeline ID, plugin ID, payload and event metadata.  The response returns zero or more events, a status (OK/DROP/RETRY/ERROR), and optionally `error_events` — plugin‑rejected events that the engine routes to the transformer's per‑stage error sink.
 * `TransformStream(stream TransformStreamMessage)` – bidirectional streaming for high throughput (not yet used by the engine).
 * `Health` and `Metadata` – liveness and capability queries.
 
@@ -153,15 +156,25 @@ A typical plugin parses the payload, applies domain logic and returns transforme
 
 Sinks consume frames emitted by the runner and forward them to downstream systems.  Each sink implements an adapter interface with the following methods:
 
-* `Configure(any) error` – initialises the sink using a configuration object (the concrete type depends on the sink).  Configuration is passed as an opaque `any` rather than a context/spec pair  callers must construct the appropriate config before calling this method.
-* `Push(*Frame) error` – sends a frame to the sink.  The sink may batch frames or perform asynchronous writes.
-* `Close() error` – flushes outstanding data and releases resources.
+* `Configure(ctx context.Context, cfg any) error` – initialises the sink using a configuration object.
+* `Publish(ctx context.Context, frame *pb.Frame) error` – sends a frame to the sink.  The sink may batch frames or perform asynchronous writes.
+* `Close(ctx context.Context) error` – flushes outstanding data and releases resources.
 
-Sinks that need to propagate acknowledgements implement the separate `AckAware` interface, which defines:
+Sinks that confirm delivery asynchronously implement `AckAware`:
 
-* `BindAck(func(*pb.CheckpointToken))` – binds a callback that is invoked whenever the sink finishes processing a frame.  This callback allows the sink to send acknowledgement tokens back to the source adapter through the runner.
+* `BindAck(EmitFn)` – where `EmitFn = func(ctx context.Context, tok *pb.CheckpointToken)`.  Binds a callback invoked when the sink confirms frame delivery, passing the checkpoint token back to the AckCoordinator.
 
-The current implementation includes an `stdout` sink that prints each frame and batches acknowledgements.  Additional sinks can be implemented to write to Kafka producers, HTTP endpoints, filesystems or databases.
+Sinks that can detect per‑message delivery failure implement `NackAware`:
+
+* `BindNack(NackFn)` – where `NackFn = func(ctx context.Context, frame *pb.Frame, err error)`.  Binds a callback invoked when the sink permanently fails to deliver a frame.  The AckCoordinator routes the frame to the engine DLQ sink (if configured) then acks the checkpoint token so the pipeline keeps flowing.
+
+A sink can implement both `AckAware` and `NackAware`.  If `NackAware` is not bound (no DLQ configured), the sink falls back to withholding the ack for redelivery by the source.
+
+The current implementation includes:
+
+* **stdout** – synchronous sink, prints each frame inline.
+* **Kafka** – `AckAware` + `NackAware` via Sarama `AsyncProducer`.  `ackLoop()` reads `Successes`/`Errors` channels.
+* **S3** – `AckAware` + `NackAware` with batch uploads.  `nackAll()` routes all frames in a failed batch to the DLQ.
 
 ## Control Plane & Metrics
 
@@ -216,9 +229,13 @@ Sink(s) → Output + optional ACK
 
 1. A record is consumed from Kafka and converted into a `Frame` by the source adapter.
 2. The runner wraps the payload and metadata into a `TransformRequest` and calls the first transformer stage.  The request includes the pipeline ID, plugin ID, payload and event metadata.
-3. The plugin processes the request and returns a `TransformResponse` with zero or more events and a status.  The runner handles `OK`, `DROP`, `RETRY` and `ERROR` statuses accordingly.
-4. The runner converts each returned event back into a `Frame` and passes it to the next stage.  This process repeats for all stages.
-5. When all stages succeed, the resulting frames are pushed to sinks.  If a sink implements `AckAware`, it will invoke a callback with a `CheckpointToken` when it finishes processing  the runner passes this token back to the source adapter so that the Kafka offset can be committed.
+3. The plugin processes the request and returns a `TransformResponse` with zero or more events, a status (OK/DROP/RETRY/ERROR), and optionally `error_events` representing plugin‑rejected data.  The runner handles statuses accordingly.
+4. If the response contains `error_events`, the runner publishes them to the transformer's per‑stage error sink (if configured).
+5. The runner converts each returned event back into a `Frame` and passes it to the next stage.  This process repeats for all stages.
+6. When all stages succeed, the resulting frames are pushed to sinks.  Three acknowledgement paths exist:
+   - **AckAware sinks** invoke `EmitFn(ctx, tok)` on successful delivery — the AckCoordinator decrements the barrier and commits when all sinks ack.
+   - **NackAware sinks** invoke `NackFn(ctx, frame, err)` on delivery failure — the AckCoordinator routes the frame to the engine DLQ sink (if configured) then acks.
+   - **Synchronous sinks** return from `Publish`; the runner treats the return as implicit ack.
 
 ## Extensibility and Scalability
 
@@ -232,10 +249,11 @@ At present the engine runs a **single pipeline per process**.  Running multiple 
 | Area                  | Today (Implemented)                                   | Roadmap (Planned)                                        |
 |-----------------------|-------------------------------------------------------|----------------------------------------------------------|
 | Source                | Kafka (Sarama), auto & E2E commit modes               | Additional drivers (kgo, Confluent), more sources        |
-| Transformers          | gRPC unary Transform  timeouts, retries, drop+ack     | Streaming TransformStream, batching, credits/backpressure|
-| Sinks                 | stdout (ack batching)                                 | Kafka producer, HTTP, storage sinks                      |
-| Control plane         | Control service registered (handlers unimplemented)   | Implement handlers  auth, RBAC                           |
-| Health                | Protobuf defined                                      | Wire Health service  liveness/ready probes               |
+| Transformers          | gRPC unary Transform, timeouts, retries, drop+ack, `error_events` | Streaming TransformStream, batching, credits/backpressure|
+| Sinks                 | stdout (sync), Kafka (AckAware+NackAware), S3 (AckAware+NackAware) | HTTP, additional storage sinks                 |
+| Error Handling        | Plugin error_events→error_sink, engine DLQ via NackAware, DeadLetterFn | Per-event retry policies, circuit breaker     |
+| Control plane         | Control service registered (handlers unimplemented)   | Implement handlers, auth, RBAC                           |
+| Health                | Protobuf defined                                      | Wire Health service, liveness/ready probes               |
 | Metrics               | Prometheus /metrics                                   | Per-stage latency, retries, fan-out, sink/backpressure   |
 | Pipelines             | Single pipeline per process                           | Multiple concurrent pipelines, hot reload                |
 | Logging               | slog w/ env config (level/json)                       | OTEL logs/exporters, structured correlation IDs          |
