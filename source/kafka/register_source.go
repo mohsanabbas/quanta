@@ -32,7 +32,7 @@ var _ source.Adapter = (*sourceAdapter)(nil)
 func (a *sourceAdapter) Configure(ctx context.Context, cfg any) error {
 	kc, ok := cfg.(*Config)
 	if !ok {
-		return qerr.Config("kafka", "configure", fmt.Errorf("expected *kafka.Config, got %T", cfg))
+		return qerr.Config("kafka", "configure", fmt.Errorf("unexpected config type %T", cfg))
 	}
 	return a.driver.Configure(ctx, *kc)
 }

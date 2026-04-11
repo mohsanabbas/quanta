@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	pb "quanta/api/proto/v1"
@@ -16,12 +17,18 @@ import (
 type SaramaSink struct {
 	cfg    Config
 	prod   sarama.AsyncProducer
+	ack    sink.EmitFn
 	doneCh chan struct{}
 }
 
-var _ sink.Adapter = (*SaramaSink)(nil)
+var (
+	_ sink.Adapter  = (*SaramaSink)(nil)
+	_ sink.AckAware = (*SaramaSink)(nil)
+)
 
-type delivery struct{ ch chan error }
+type inflight struct {
+	checkpoint *pb.CheckpointToken
+}
 
 func (s *SaramaSink) Configure(_ context.Context, raw any) error {
 	var cfg Config
@@ -117,6 +124,10 @@ func buildSaramaConfig(cfg Config) (*sarama.Config, error) {
 	return sc, nil
 }
 
+func (s *SaramaSink) BindAck(fn sink.EmitFn) {
+	s.ack = fn
+}
+
 func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 	if s.prod == nil {
 		return qerr.Sink("kafka", "publish", errors.New("not configured"))
@@ -136,18 +147,12 @@ func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 		Value:     sarama.ByteEncoder(bytes.Clone(f.GetValue())),
 		Timestamp: tsOrNow(f),
 		Headers:   toRecordHeaders(f.GetHeaders()),
+		Metadata:  &inflight{checkpoint: f.Checkpoint},
 	}
-	d := &delivery{ch: make(chan error, 1)}
-	msg.Metadata = d
 
 	select {
 	case s.prod.Input() <- msg:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	select {
-	case err := <-d.ch:
-		return err
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -171,26 +176,25 @@ func (s *SaramaSink) pump() {
 				s.flushErrors()
 				return
 			}
-			if d, _ := pm.Metadata.(*delivery); d != nil {
-				select {
-				case d.ch <- nil:
-				default:
-				}
-			}
+			s.ackFromMetadata(pm.Metadata)
 		case pe, ok := <-s.prod.Errors():
 			if !ok {
 				s.flushSuccesses()
 				return
 			}
-			if pe != nil {
-				if d, _ := pe.Msg.Metadata.(*delivery); d != nil {
-					select {
-					case d.ch <- pe.Err:
-					default:
-					}
-				}
+			if pe != nil && pe.Msg != nil {
+				slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
+					"topic", pe.Msg.Topic,
+					"err", pe.Err,
+				)
 			}
 		}
+	}
+}
+
+func (s *SaramaSink) ackFromMetadata(meta any) {
+	if inf, _ := meta.(*inflight); inf != nil && s.ack != nil {
+		s.ack(inf.checkpoint)
 	}
 }
 
@@ -201,13 +205,11 @@ func (s *SaramaSink) flushErrors() {
 			if !ok {
 				return
 			}
-			if pe != nil {
-				if d, _ := pe.Msg.Metadata.(*delivery); d != nil {
-					select {
-					case d.ch <- pe.Err:
-					default:
-					}
-				}
+			if pe != nil && pe.Msg != nil {
+				slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
+					"topic", pe.Msg.Topic,
+					"err", pe.Err,
+				)
 			}
 		default:
 			return
@@ -222,12 +224,7 @@ func (s *SaramaSink) flushSuccesses() {
 			if !ok {
 				return
 			}
-			if d, _ := pm.Metadata.(*delivery); d != nil {
-				select {
-				case d.ch <- nil:
-				default:
-				}
-			}
+			s.ackFromMetadata(pm.Metadata)
 		default:
 			return
 		}

@@ -3,8 +3,8 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
-	"sync"
 	"time"
 
 	pb "quanta/api/proto/v1"
@@ -13,16 +13,35 @@ import (
 	"quanta/sink"
 	"quanta/source"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+type transformOutcome int8
+
+const (
+	outcomeEvents transformOutcome = iota
+
+	outcomeDrop
+
+	outcomeFailed
+
+	outcomeAbort
+)
+
+type DeadLetterFn func(stage string, frame *pb.Frame, cause error)
 
 type Runner struct {
 	source source.Adapter
 	sinks  []sink.Adapter
 	stages []transformStage
 
-	mu   sync.Mutex
-	subs []func(*pb.ConnectorAck)
+	coord *AckCoordinator
+
+	ackAwareSinks int
+
+	sourceErr chan error
 }
 
 type transformStage struct {
@@ -33,16 +52,33 @@ type transformStage struct {
 	retryBackoff  time.Duration
 }
 
-func NewRunner() *Runner {
+func NewRunner(coord *AckCoordinator) *Runner {
+	if coord == nil {
+		coord = NewAckCoordinator()
+	}
 	return &Runner{
-		stages: make([]transformStage, 0, 4),
-		sinks:  make([]sink.Adapter, 0, 2),
+		stages:    make([]transformStage, 0, 4),
+		sinks:     make([]sink.Adapter, 0, 2),
+		sourceErr: make(chan error, 1),
+		coord:     coord,
 	}
 }
 
-func (r *Runner) SetSource(s source.Adapter) { r.source = s }
+func (r *Runner) SetSource(s source.Adapter) {
+	r.source = s
+}
 
-func (r *Runner) AddSink(s sink.Adapter) { r.sinks = append(r.sinks, s) }
+func (r *Runner) AddSink(s sink.Adapter) {
+	if ackAware, ok := s.(sink.AckAware); ok {
+		ackAware.BindAck(r.coord.Ack)
+		r.ackAwareSinks++
+	}
+	r.sinks = append(r.sinks, s)
+}
+
+func (r *Runner) SetDeadLetter(fn DeadLetterFn) {
+	r.coord.SetDeadLetter(fn)
+}
 
 func (r *Runner) AddTransformer(name string, c transform.Client, timeout time.Duration, attempts int, backoff time.Duration) {
 	r.stages = append(r.stages, transformStage{
@@ -55,22 +91,7 @@ func (r *Runner) AddTransformer(name string, c transform.Client, timeout time.Du
 }
 
 func (r *Runner) SubscribeAck(fn func(*pb.ConnectorAck)) {
-	r.mu.Lock()
-	r.subs = append(r.subs, fn)
-	r.mu.Unlock()
-}
-
-func (r *Runner) Ack(tok *pb.CheckpointToken) {
-	ack := &pb.ConnectorAck{Checkpoint: tok}
-
-	r.mu.Lock()
-	handlers := make([]func(*pb.ConnectorAck), len(r.subs))
-	copy(handlers, r.subs)
-	r.mu.Unlock()
-
-	for _, fn := range handlers {
-		fn(ack)
-	}
+	r.coord.Subscribe(fn)
 }
 
 func (r *Runner) Start(ctx context.Context) error {
@@ -78,21 +99,37 @@ func (r *Runner) Start(ctx context.Context) error {
 		return qerr.Pipeline("start", errors.New("no source configured"))
 	}
 	go func() {
-		_ = r.source.Run(ctx, func(runCtx context.Context, frame *pb.Frame) error {
+		err := r.source.Run(ctx, func(runCtx context.Context, frame *pb.Frame) error {
 			return r.pushFrame(runCtx, frame)
 		})
+		if err != nil && ctx.Err() == nil {
+			select {
+			case r.sourceErr <- qerr.Pipeline("source-run", err):
+			default:
+				slog.Warn("engine: dropping source error; no receiver", "error", err)
+			}
+		}
 	}()
 	return nil
 }
 
+func (r *Runner) SourceErr() <-chan error {
+	return r.sourceErr
+}
+
 func (r *Runner) Close(ctx context.Context) error {
+	var errs []error
 	for _, st := range r.stages {
-		_ = st.client.Close()
+		if err := st.client.Close(); err != nil {
+			errs = append(errs, qerr.Transform(st.name, "close", err))
+		}
 	}
 	for _, s := range r.sinks {
-		_ = s.Close(ctx)
+		if err := s.Close(ctx); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
@@ -103,69 +140,187 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 	}
 
 	if len(frames) == 0 {
-		r.Ack(f.Checkpoint)
+		r.coord.CommitNow(f.Checkpoint)
 		return nil
 	}
 
+	syncSinks := len(r.sinks) - r.ackAwareSinks
+	refs := len(frames) * r.ackAwareSinks
+	if syncSinks > 0 || r.ackAwareSinks == 0 {
+		refs++
+	}
+
+	barrier := r.coord.Barrier(f.Checkpoint, refs)
+
 	if err := r.publishAll(ctx, frames); err != nil {
+		barrier.Abort()
 		return err
 	}
 
-	r.Ack(f.Checkpoint)
+	if syncSinks > 0 || r.ackAwareSinks == 0 {
+		barrier.Complete()
+	}
+
 	return nil
 }
 
 func (r *Runner) runStage(ctx context.Context, st transformStage, in []*pb.Frame) []*pb.Frame {
 	out := make([]*pb.Frame, 0, len(in))
 	for _, f := range in {
-		events := r.callTransform(ctx, st, f)
-		if events == nil {
-			continue
+		outcome, events := r.callTransform(ctx, st, f)
+		switch outcome {
+		case outcomeEvents:
+			out = append(out, toFrames(f, events)...)
+		case outcomeDrop, outcomeFailed:
+			// no-op: filtered or dead-lettered
+		case outcomeAbort:
+			// context cancelled, stop processing
 		}
-		out = append(out, toFrames(f, events)...)
 	}
 	return out
 }
 
-func (r *Runner) callTransform(ctx context.Context, st transformStage, f *pb.Frame) []*pb.Event {
+func (r *Runner) callTransform(ctx context.Context, st transformStage, f *pb.Frame) (transformOutcome, []*pb.Event) {
 	req := toRequest(f)
 	req.PluginId = st.name
 
 	for try := 0; ; try++ {
+		if ctx.Err() != nil {
+			return outcomeAbort, nil
+		}
+
 		callCtx, cancel := r.stageContext(ctx, st.timeout)
 		resp, err := st.client.Transform(callCtx, req)
 		cancel()
 
 		if err != nil {
-			if try < st.retryAttempts {
-				time.Sleep(st.retryBackoff)
+			outcome, retry := r.handleTransportError(ctx, st, f, err, try)
+			if retry {
 				continue
 			}
-			r.Ack(f.Checkpoint)
-			return nil
+			return outcome, nil
 		}
 
-		switch resp.GetStatus() {
-		case pb.Status_OK:
-			return resp.GetEvents()
-		case pb.Status_DROP:
-			r.Ack(f.Checkpoint)
-			return nil
-		case pb.Status_RETRY, pb.Status_ERROR:
-			if try < st.retryAttempts {
-				time.Sleep(st.retryBackoff)
-				continue
-			}
-			r.Ack(f.Checkpoint)
-			return nil
-		default:
-			if try < st.retryAttempts {
-				time.Sleep(st.retryBackoff)
-				continue
-			}
-			r.Ack(f.Checkpoint)
-			return nil
+		outcome, events, retry := r.handleResponse(ctx, st, f, resp, try)
+		if retry {
+			continue
 		}
+		return outcome, events
+	}
+}
+
+func (r *Runner) handleTransportError(ctx context.Context, st transformStage, f *pb.Frame, err error, try int) (transformOutcome, bool) {
+	isTimeout := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	if isTimeout && ctx.Err() != nil {
+		return outcomeAbort, false
+	}
+
+	if isTimeout || isTransientGRPC(err) {
+		switch r.retryOrExhaust(ctx, st, try) {
+		case retryProceed:
+			return 0, true
+		case retryAbort:
+			return outcomeAbort, false
+		case retryExhaust:
+		}
+		return r.handlePermanentFailure(st, f, err), false
+	}
+
+	slog.Warn("transform permanent transport error",
+		"stage", st.name,
+		"code", status.Code(err).String(),
+		"error", err,
+	)
+	return r.handlePermanentFailure(st, f, err), false
+}
+
+func (r *Runner) handleResponse(ctx context.Context, st transformStage, f *pb.Frame, resp *pb.TransformResponse, try int) (transformOutcome, []*pb.Event, bool) {
+	switch resp.GetStatus() {
+	case pb.Status_OK:
+		return outcomeEvents, resp.GetEvents(), false
+
+	case pb.Status_DROP:
+		slog.Debug("transform frame dropped by plugin",
+			"stage", st.name,
+		)
+		return outcomeDrop, nil, false
+
+	case pb.Status_RETRY:
+		switch r.retryOrExhaust(ctx, st, try) {
+		case retryProceed:
+			return 0, nil, true
+		case retryAbort:
+			return outcomeAbort, nil, false
+		case retryExhaust:
+		}
+		return r.handlePermanentFailure(st, f,
+			errors.New("plugin returned RETRY but retries exhausted")), nil, false
+
+	case pb.Status_ERROR:
+		slog.Error("transform plugin returned permanent ERROR",
+			"stage", st.name,
+		)
+		return r.handlePermanentFailure(st, f,
+			errors.New("plugin returned permanent ERROR")), nil, false
+
+	default:
+		slog.Error("transform unknown status from plugin",
+			"stage", st.name,
+			"status", resp.GetStatus().String(),
+		)
+		return r.handlePermanentFailure(st, f,
+			errors.New("plugin returned unknown status")), nil, false
+	}
+}
+
+type retryVerdict int8
+
+const (
+	retryProceed retryVerdict = iota
+	retryExhaust
+	retryAbort
+)
+
+func (r *Runner) retryOrExhaust(ctx context.Context, st transformStage, try int) retryVerdict {
+	if try >= st.retryAttempts {
+		return retryExhaust
+	}
+	slog.Debug("transform retrying",
+		"stage", st.name,
+		"attempt", try+1,
+		"max", st.retryAttempts,
+	)
+	if r.backoffOrCancel(ctx, st.retryBackoff) {
+		return retryProceed
+	}
+	return retryAbort
+}
+
+func (r *Runner) handlePermanentFailure(st transformStage, f *pb.Frame, cause error) transformOutcome {
+	r.coord.Fail(st.name, f, cause)
+	return outcomeFailed
+}
+
+func isTransientGRPC(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable,
+		codes.DeadlineExceeded,
+		codes.ResourceExhausted,
+		codes.Aborted:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Runner) backoffOrCancel(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

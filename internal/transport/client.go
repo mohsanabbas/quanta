@@ -2,6 +2,7 @@ package transport
 
 import (
 	"fmt"
+	"io"
 
 	pb "quanta/api/proto/v1"
 	qerr "quanta/internal/errors"
@@ -10,7 +11,18 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func Dial(port int) (pb.ControlClient, error) {
+type ClientConn struct {
+	pb.ControlClient
+	conn *grpc.ClientConn
+}
+
+var _ io.Closer = (*ClientConn)(nil)
+
+func (c *ClientConn) Close() error {
+	return c.conn.Close()
+}
+
+func Dial(port int) (*ClientConn, error) {
 	cc, err := grpc.NewClient(
 		fmt.Sprintf("localhost:%d", port),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -18,5 +30,8 @@ func Dial(port int) (pb.ControlClient, error) {
 	if err != nil {
 		return nil, qerr.Transport("control", "dial", err)
 	}
-	return pb.NewControlClient(cc), nil
+	return &ClientConn{
+		ControlClient: pb.NewControlClient(cc),
+		conn:          cc,
+	}, nil
 }

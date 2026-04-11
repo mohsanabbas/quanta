@@ -2,7 +2,7 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"quanta/internal/config"
 	qerr "quanta/internal/errors"
@@ -17,7 +17,8 @@ func Compile(ctx context.Context, path string) (*Runner, error) {
 		return nil, qerr.Pipeline("config", err)
 	}
 
-	r := NewRunner()
+	coord := NewAckCoordinator()
+	r := NewRunner(coord)
 
 	if err := compileSource(ctx, cfg, r); err != nil {
 		return nil, err
@@ -40,7 +41,7 @@ func compileSource(ctx context.Context, cfg config.PipelineConfig, r *Runner) er
 
 	confPath := cfg.Source.ResolvedConfigPath()
 	if confPath == "" {
-		return qerr.Config(cfg.Source.Kind, "resolve", fmt.Errorf("missing config_file for source %q", cfg.Source.Kind))
+		return qerr.Config(cfg.Source.Kind, "resolve", errors.New("missing config_file for source"))
 	}
 
 	sourceCfg, err := source.LoadConfig(cfg.Source.Kind, confPath)
@@ -77,9 +78,9 @@ func newTransformClient(ctx context.Context, t config.TransformerConfig) (transf
 		}
 		return cli, nil
 	case "inproc":
-		return nil, qerr.Transform(t.Name, "create", fmt.Errorf("in-proc transformer not yet supported"))
+		return nil, qerr.Transform(t.Name, "create", errors.New("in-proc transformer not yet supported"))
 	default:
-		return nil, qerr.Transform(t.Name, "create", fmt.Errorf("unsupported transformer type %q", t.Type))
+		return nil, qerr.Transform(t.Name, "create", errors.New("unsupported transformer type"))
 	}
 }
 
@@ -102,9 +103,6 @@ func compileSinks(ctx context.Context, cfg config.PipelineConfig, r *Runner) err
 			return qerr.Sink(name, "configure", err)
 		}
 
-		if ackAware, ok := drv.(sink.AckAware); ok {
-			ackAware.BindAck(r.Ack)
-		}
 		r.AddSink(drv)
 	}
 	return nil

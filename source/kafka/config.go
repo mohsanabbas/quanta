@@ -1,7 +1,7 @@
 package kafka
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +13,6 @@ import (
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
-
-	stderrors "errors"
 )
 
 type CommitMode string
@@ -112,7 +110,7 @@ func loadTuningConfig(publicPath string) (Tuning, error) {
 				if err := k.Load(file.Provider(tuningPath), yaml.Parser()); err != nil {
 					return Tuning{}, err
 				}
-			} else if !stderrors.Is(err, os.ErrNotExist) {
+			} else if !errors.Is(err, os.ErrNotExist) {
 				return Tuning{}, err
 			}
 		}
@@ -181,23 +179,23 @@ func applyPublicDefaults(c *PublicConfig) {
 
 func validatePublic(c PublicConfig) error {
 	if len(c.Brokers) == 0 {
-		return qerr.Config("kafka", "validate", stderrors.New("brokers required"))
+		return qerr.Config("kafka", "validate", errors.New("brokers required"))
 	}
 	if len(c.Topics) == 0 {
-		return qerr.Config("kafka", "validate", stderrors.New("topics required"))
+		return qerr.Config("kafka", "validate", errors.New("topics required"))
 	}
 	if c.GroupID == "" {
-		return qerr.Config("kafka", "validate", stderrors.New("group_id required"))
+		return qerr.Config("kafka", "validate", errors.New("group_id required"))
 	}
 	switch c.CommitMode {
 	case CommitAuto, CommitE2E:
 	default:
-		return qerr.Config("kafka", "validate", fmt.Errorf("invalid commit_mode %q", c.CommitMode))
+		return qerr.Config("kafka", "validate", errors.New("unsupported commit_mode"))
 	}
 	switch c.StartFrom {
 	case "oldest", "newest":
 	default:
-		return qerr.Config("kafka", "validate", fmt.Errorf("invalid start_from %q", c.StartFrom))
+		return qerr.Config("kafka", "validate", errors.New("unsupported start_from"))
 	}
 	return nil
 }
@@ -222,23 +220,22 @@ func applyTuningDefaults(t *Tuning) {
 
 func validateTuning(t Tuning) error {
 	if t.InFlightBytes <= 0 {
-		return qerr.Config("kafka", "validate", stderrors.New("inflight_bytes must be positive"))
+		return qerr.Config("kafka", "validate", errors.New("inflight_bytes must be positive"))
 	}
 	if t.InFlightMsgs <= 0 {
-		return qerr.Config("kafka", "validate", stderrors.New("inflight_msgs must be positive"))
+		return qerr.Config("kafka", "validate", errors.New("inflight_msgs must be positive"))
 	}
 	if t.WindowBits < _minWindowBits {
-		return qerr.Config("kafka", "validate", stderrors.New("window_bits must be >= 256"))
+		return qerr.Config("kafka", "validate", errors.New("window_bits must be >= 256"))
 	}
 	if int64(t.WindowBits) < t.InFlightMsgs {
-		return qerr.Config("kafka", "validate",
-			fmt.Errorf("inflight_msgs (%d) must be <= window_bits (%d)", t.InFlightMsgs, t.WindowBits))
+		return qerr.Config("kafka", "validate", errors.New("inflight_msgs must be <= window_bits"))
 	}
 	if t.CommitInterval <= 0 {
-		return qerr.Config("kafka", "validate", stderrors.New("commit_interval must be positive"))
+		return qerr.Config("kafka", "validate", errors.New("commit_interval must be positive"))
 	}
 	if t.CommitStep == 0 {
-		return qerr.Config("kafka", "validate", stderrors.New("commit_step must be positive"))
+		return qerr.Config("kafka", "validate", errors.New("commit_step must be positive"))
 	}
 	return nil
 }
