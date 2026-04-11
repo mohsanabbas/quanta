@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -170,7 +171,7 @@ func TestDriverAckOnFlush(t *testing.T) {
 
 	var acked []*pb.CheckpointToken
 	var ackMu sync.Mutex
-	d.BindAck(func(tok *pb.CheckpointToken) {
+	d.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
 		ackMu.Lock()
 		acked = append(acked, tok)
 		ackMu.Unlock()
@@ -247,6 +248,7 @@ func TestDriverClonesSafely(t *testing.T) {
 func TestDriverImplementsInterfaces(t *testing.T) {
 	var _ sink.Adapter = (*Driver)(nil)
 	var _ sink.AckAware = (*Driver)(nil)
+	var _ sink.NackAware = (*Driver)(nil)
 }
 
 func TestDriverUploadError_WithholdsAck(t *testing.T) {
@@ -257,7 +259,7 @@ func TestDriverUploadError_WithholdsAck(t *testing.T) {
 	defer d.Close(context.Background())
 
 	var acked atomic.Int32
-	d.BindAck(func(_ *pb.CheckpointToken) { acked.Add(1) })
+	d.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
 
 	ctx := context.Background()
 	for i := range 3 {
@@ -276,6 +278,120 @@ func TestDriverUploadError_WithholdsAck(t *testing.T) {
 	assert.Equal(t, int32(0), acked.Load(), "ack must be withheld on upload failure")
 }
 
+// ---------------------------------------------------------------------------
+// NackAware tests
+// ---------------------------------------------------------------------------
+
+type nackRecord struct {
+	frame *pb.Frame
+	err   error
+}
+
+func TestDriverNack(t *testing.T) {
+	tests := []struct {
+		name       string
+		giveErr    error // S3 PutObject error (nil = success)
+		encFail    bool  // force encoder failure
+		wantNacks  int
+		wantAcks   int
+		wantFrames bool // verify nacked frames match published
+	}{
+		{
+			name:       "upload failure nacks all frames in batch",
+			giveErr:    errors.New("S3 unavailable"),
+			wantNacks:  3,
+			wantAcks:   0,
+			wantFrames: true,
+		},
+		{
+			name:       "successful upload acks, no nacks",
+			giveErr:    nil,
+			wantNacks:  0,
+			wantAcks:   3,
+			wantFrames: false,
+		},
+		{
+			name:       "encode failure nacks all frames in batch",
+			encFail:    true,
+			wantNacks:  3,
+			wantAcks:   0,
+			wantFrames: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer goleak.VerifyNone(t)
+
+			spy := &spyClient{err: tt.giveErr}
+
+			var enc Encoder
+			if tt.encFail {
+				enc = &failEncoder{}
+			}
+
+			d := newTestDriverWithEncoder(t, spy, enc)
+			defer d.Close(context.Background())
+
+			var acked atomic.Int32
+			d.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
+
+			var nackMu sync.Mutex
+			var nacks []nackRecord
+			d.BindNack(func(_ context.Context, f *pb.Frame, err error) {
+				nackMu.Lock()
+				nacks = append(nacks, nackRecord{frame: f, err: err})
+				nackMu.Unlock()
+			})
+
+			ctx := context.Background()
+			frames := make([]*pb.Frame, 3)
+			for i := range frames {
+				frames[i] = &pb.Frame{
+					Key:   []byte(fmt.Sprintf("key-%d", i)),
+					Value: []byte(fmt.Sprintf(`{"i":%d}`, i)),
+					Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
+						Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: int64(i)},
+					}},
+				}
+				require.NoError(t, d.Publish(ctx, frames[i]))
+			}
+
+			// Wait for flush to complete (either ack or nack path).
+			require.Eventually(t, func() bool {
+				nackMu.Lock()
+				n := len(nacks)
+				nackMu.Unlock()
+				a := int(acked.Load())
+				return n+a >= 3
+			}, 2*time.Second, 10*time.Millisecond, "expected ack or nack for all frames")
+
+			assert.Equal(t, int32(tt.wantAcks), acked.Load(), "ack count mismatch")
+
+			nackMu.Lock()
+			assert.Len(t, nacks, tt.wantNacks, "nack count mismatch")
+
+			if tt.wantFrames {
+				for i, nr := range nacks {
+					assert.Equal(t, frames[i].Checkpoint, nr.frame.Checkpoint,
+						"nack[%d] checkpoint must match published frame", i)
+					assert.Error(t, nr.err, "nack[%d] must carry error", i)
+				}
+			}
+			nackMu.Unlock()
+		})
+	}
+}
+
+// failEncoder always returns an error on Encode.
+type failEncoder struct{}
+
+func (f *failEncoder) Encode(_ [][]byte) ([]byte, error) {
+	return nil, errors.New("encoder broken")
+}
+
+func (f *failEncoder) ContentType() string { return "application/octet-stream" }
+
 func newTestDriver(t *testing.T, spy *spyClient) *Driver {
 	t.Helper()
 	cfg := validCfg()
@@ -283,6 +399,36 @@ func newTestDriver(t *testing.T, spy *spyClient) *Driver {
 
 	enc, err := newEncoder(cfg.Format)
 	require.NoError(t, err)
+
+	pool := newBatchPool(cfg.BatchSize)
+
+	flushCtx, cancel := context.WithCancel(context.Background())
+
+	d := &Driver{
+		cfg:     cfg,
+		client:  spy,
+		encoder: enc,
+		pool:    pool,
+		current: pool.Get().(*batch),
+		sealCh:  make(chan *batch, 1),
+		stopCh:  make(chan struct{}),
+		doneCh:  make(chan struct{}),
+		cancel:  cancel,
+	}
+	go d.flushLoop(flushCtx)
+	return d
+}
+
+func newTestDriverWithEncoder(t *testing.T, spy *spyClient, enc Encoder) *Driver {
+	t.Helper()
+	cfg := validCfg()
+	require.NoError(t, cfg.validate())
+
+	if enc == nil {
+		var err error
+		enc, err = newEncoder(cfg.Format)
+		require.NoError(t, err)
+	}
 
 	pool := newBatchPool(cfg.BatchSize)
 

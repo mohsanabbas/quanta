@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"bytes"
+	"context"
 	"log/slog"
 	"math"
 	"strconv"
@@ -22,6 +24,12 @@ type Barrier interface {
 	Abort()
 }
 
+// DLQPublisher is the narrow interface the coordinator needs from a DLQ sink.
+// Any sink.Adapter satisfies this implicitly — no coupling to the sink package.
+type DLQPublisher interface {
+	Publish(ctx context.Context, frame *pb.Frame) error
+}
+
 // AckCoordinator centralized checkpoint lifecycle manager.
 // The coordinator is the ONLY component that commits checkpoints back to
 // the source.
@@ -30,6 +38,7 @@ type AckCoordinator struct {
 	subs     []func(*pb.ConnectorAck)
 	barriers map[string]*ackBarrier
 	dlFn     DeadLetterFn
+	dlqSink  DLQPublisher
 }
 
 func NewAckCoordinator() *AckCoordinator {
@@ -81,9 +90,10 @@ func (c *AckCoordinator) Barrier(tok *pb.CheckpointToken, refs int) Barrier {
 	return b
 }
 
-// Ack is the callback given to AckAware sinks satisfies sink.EmitFn.
+// Ack is the callback given to AckAware sinks — satisfies sink.EmitFn.
+// The context is forwarded from the sink for OTel trace/metric propagation.
 // Thread-safe. No-op if no barrier exists or token is nil.
-func (c *AckCoordinator) Ack(tok *pb.CheckpointToken) {
+func (c *AckCoordinator) Ack(_ context.Context, tok *pb.CheckpointToken) {
 	key := tokenKey(tok)
 	if key == "" {
 		return
@@ -128,6 +138,95 @@ func (c *AckCoordinator) Len() int {
 	n := len(c.barriers)
 	c.mu.Unlock()
 	return n
+}
+
+// SetDLQSink configures the dead-letter queue publisher.
+// Thread-safe; replaces any previously set DLQ sink.
+func (c *AckCoordinator) SetDLQSink(s DLQPublisher) {
+	c.mu.Lock()
+	c.dlqSink = s
+	c.mu.Unlock()
+}
+
+// HasDLQ returns whether a DLQ sink is configured.
+func (c *AckCoordinator) HasDLQ() bool {
+	c.mu.Lock()
+	has := c.dlqSink != nil
+	c.mu.Unlock()
+	return has
+}
+
+// Nack handles permanent sink delivery failure for a frame.
+//
+// Behaviour:
+//  1. Abort the barrier (no normal commit).
+//  2. If a DLQ sink is configured, publish a DLQ frame.
+//  3. On DLQ success commit checkpoint (source advances).
+//  4. On DLQ failure or no DLQ withhold commit (source redelivers).
+//
+// Thread-safe. No-op for nil frames or nil checkpoints.
+func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error) {
+	if frame == nil {
+		return
+	}
+	tok := frame.Checkpoint
+	key := tokenKey(tok)
+
+	// Abort the barrier so the normal ack path cannot commit.
+	if key != "" {
+		c.mu.Lock()
+		if b := c.barriers[key]; b != nil {
+			b.state.CompareAndSwap(_barrierLive, _barrierAborted)
+			if c.barriers[key] == b {
+				delete(c.barriers, key)
+			}
+		}
+		c.mu.Unlock()
+	}
+
+	// No checkpoint → nothing to commit.
+	if tok == nil {
+		slog.Debug("nack: frame has nil checkpoint, nothing to commit or DLQ",
+			"error", cause)
+		return
+	}
+
+	c.mu.Lock()
+	dlq := c.dlqSink
+	c.mu.Unlock()
+
+	if dlq == nil {
+		slog.Warn("nack: no DLQ configured, withholding commit for redelivery",
+			"key", key, "error", cause)
+		return
+	}
+
+	dlqFrame := buildDLQFrame(frame, cause)
+	if err := dlq.Publish(ctx, dlqFrame); err != nil {
+		slog.Error("nack: DLQ publish failed, withholding commit for redelivery",
+			"key", key, "dlq_error", err, "original_error", cause)
+		return
+	}
+
+	c.commit(tok)
+}
+
+// buildDLQFrame wraps an original frame with error metadata for the DLQ.
+func buildDLQFrame(original *pb.Frame, cause error) *pb.Frame {
+	headers := make(map[string][]byte, len(original.Headers)+2)
+	for k, v := range original.Headers {
+		headers[k] = bytes.Clone(v)
+	}
+	headers["x-dlq-error"] = []byte(cause.Error())
+	headers["x-dlq-original-key"] = bytes.Clone(original.Key)
+
+	return &pb.Frame{
+		Key:        original.Key,
+		Value:      original.Value,
+		Headers:    headers,
+		Ts:         original.Ts,
+		Checkpoint: original.Checkpoint,
+	}
 }
 
 func (c *AckCoordinator) commit(tok *pb.CheckpointToken) {

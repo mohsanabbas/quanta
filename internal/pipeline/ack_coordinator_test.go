@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,8 +129,8 @@ func TestAckCoordinator_AckResolvesBarrier(t *testing.T) {
 	tok := kafkaTok("t", 1, 300)
 	coord.Barrier(tok, 2)
 
-	coord.Ack(tok)
-	coord.Ack(tok)
+	coord.Ack(context.Background(), tok)
+	coord.Ack(context.Background(), tok)
 
 	if got := ac.get(); got != 1 {
 		t.Fatalf("commit count: got %d, want 1", got)
@@ -143,7 +144,7 @@ func TestAckCoordinator_AckNoBarrierIsNoop(t *testing.T) {
 	coord := NewAckCoordinator()
 	coord.Subscribe(ac.handler)
 
-	coord.Ack(kafkaTok("t", 0, 999))
+	coord.Ack(context.Background(), kafkaTok("t", 0, 999))
 
 	if got := ac.get(); got != 0 {
 		t.Fatalf("commit count: got %d, want 0", got)
@@ -230,7 +231,7 @@ func TestAckCoordinator_ConcurrentRelease(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
-			coord.Ack(tok)
+			coord.Ack(context.Background(), tok)
 		}()
 	}
 	wg.Wait()
@@ -252,7 +253,7 @@ func TestAckCoordinator_BarrierCleanedUp(t *testing.T) {
 		t.Fatal("barrier should be present before completion")
 	}
 
-	coord.Ack(tok)
+	coord.Ack(context.Background(), tok)
 
 	if coord.Len() != 0 {
 		t.Fatal("barrier should be removed after commit")
@@ -335,7 +336,7 @@ func TestAckCoordinator_NilToken(t *testing.T) {
 		coord := NewAckCoordinator()
 		coord.Subscribe(ac.handler)
 
-		coord.Ack(nil) // must not panic
+		coord.Ack(context.Background(), nil) // must not panic
 		if got := ac.get(); got != 0 {
 			t.Fatalf("nil ack must be noop: got %d", got)
 		}
@@ -423,13 +424,13 @@ func TestAckCoordinator_Len(t *testing.T) {
 		t.Fatalf("Len: got %d, want 3", coord.Len())
 	}
 
-	coord.Ack(tok1)
+	coord.Ack(context.Background(), tok1)
 	if coord.Len() != 2 {
 		t.Fatalf("Len after 1 ack: got %d, want 2", coord.Len())
 	}
 
-	coord.Ack(tok2)
-	coord.Ack(tok3)
+	coord.Ack(context.Background(), tok2)
+	coord.Ack(context.Background(), tok3)
 	if coord.Len() != 0 {
 		t.Fatalf("Len after all acks: got %d, want 0", coord.Len())
 	}

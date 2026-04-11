@@ -29,6 +29,9 @@ func Compile(ctx context.Context, path string) (*Runner, error) {
 	if err := compileSinks(ctx, cfg, r); err != nil {
 		return nil, err
 	}
+	if err := compileDLQ(ctx, cfg, r); err != nil {
+		return nil, err
+	}
 
 	return r, nil
 }
@@ -64,7 +67,23 @@ func compileTransformers(ctx context.Context, cfg config.PipelineConfig, r *Runn
 		if err != nil {
 			return err
 		}
-		r.AddTransformer(t.Name, cli, t.Timeout(), t.Retry.Attempts, t.RetryBackoff())
+		var errSink sink.Adapter
+		if t.ErrorSink != nil {
+			drv, proto, sinkErr := sink.New(t.ErrorSink.Sink)
+			if sinkErr != nil {
+				return qerr.Sink(t.ErrorSink.Sink, "create-error-sink", sinkErr)
+			}
+			if t.ErrorSink.Config.Node != nil {
+				if decErr := sink.DecodeYAML(t.ErrorSink.Config.Node, proto); decErr != nil {
+					return qerr.Config(t.ErrorSink.Sink, "decode-error-sink", decErr)
+				}
+			}
+			if cfgErr := drv.Configure(ctx, proto); cfgErr != nil {
+				return qerr.Sink(t.ErrorSink.Sink, "configure-error-sink", cfgErr)
+			}
+			errSink = drv
+		}
+		r.AddTransformer(t.Name, cli, t.Timeout(), t.Retry.Attempts, t.RetryBackoff(), errSink)
 	}
 	return nil
 }
@@ -105,5 +124,31 @@ func compileSinks(ctx context.Context, cfg config.PipelineConfig, r *Runner) err
 
 		r.AddSink(drv)
 	}
+	return nil
+}
+
+func compileDLQ(ctx context.Context, cfg config.PipelineConfig, r *Runner) error {
+	if cfg.DLQ == nil || !cfg.DLQ.Enabled {
+		return nil
+	}
+
+	drv, proto, err := sink.New(cfg.DLQ.Sink)
+	if err != nil {
+		return qerr.Sink(cfg.DLQ.Sink, "create-dlq", err)
+	}
+
+	sinkCfg := proto
+	if cfg.DLQ.Config.Node != nil {
+		if err := sink.DecodeYAML(cfg.DLQ.Config.Node, proto); err != nil {
+			return qerr.Config(cfg.DLQ.Sink, "decode-dlq", err)
+		}
+		sinkCfg = proto
+	}
+
+	if err := drv.Configure(ctx, sinkCfg); err != nil {
+		return qerr.Sink(cfg.DLQ.Sink, "configure-dlq", err)
+	}
+
+	r.SetDLQSink(drv)
 	return nil
 }

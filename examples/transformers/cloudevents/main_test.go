@@ -82,7 +82,6 @@ func TestTransformProducesCloudEvent(t *testing.T) {
 	assert.Equal(t, "ai.quanta.chat_completion", md.Headers["ce-type"])
 	assert.Equal(t, "anthropic", md.Headers["ce-aiprovider"])
 	assert.Equal(t, "success", md.Headers["ce-statusclass"])
-	assert.Equal(t, "quanta-output", md.Headers["__topic"])
 
 	// Sink key.
 	assert.Equal(t, "evt-000001-def456", md.Attributes["sink.key"])
@@ -95,12 +94,12 @@ func TestTransformDLQOnInvalidJSON(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.Status_OK, resp.GetStatus())
-	require.Len(t, resp.GetEvents(), 1)
+	require.Len(t, resp.GetErrorEvents(), 1)
+	require.Empty(t, resp.GetEvents())
 
-	ev := resp.GetEvents()[0]
+	ev := resp.GetErrorEvents()[0]
 	md := ev.GetMetadata()
 
-	assert.Equal(t, "quanta-dlq", md.Headers["__topic"])
 	assert.Equal(t, "unmarshal_error", md.Headers["dlq-error-class"])
 	assert.Equal(t, _pluginName, md.Headers["dlq-transformer"])
 
@@ -123,10 +122,10 @@ func TestTransformDLQOnMissingProvider(t *testing.T) {
 		Payload: []byte(raw),
 	})
 	require.NoError(t, err)
-	require.Len(t, resp.GetEvents(), 1)
+	require.Len(t, resp.GetErrorEvents(), 1)
+	require.Empty(t, resp.GetEvents())
 
-	md := resp.GetEvents()[0].GetMetadata()
-	assert.Equal(t, "quanta-dlq", md.Headers["__topic"])
+	md := resp.GetErrorEvents()[0].GetMetadata()
 	assert.Equal(t, "validation_error", md.Headers["dlq-error-class"])
 }
 
@@ -162,10 +161,10 @@ func TestTransformDLQOnUnhealthyStatus(t *testing.T) {
 				Payload: []byte(raw),
 			})
 			require.NoError(t, err)
-			require.Len(t, resp.GetEvents(), 1)
+			require.Len(t, resp.GetErrorEvents(), 1)
+			require.Empty(t, resp.GetEvents())
 
-			md := resp.GetEvents()[0].GetMetadata()
-			assert.Equal(t, "quanta-dlq", md.Headers["__topic"])
+			md := resp.GetErrorEvents()[0].GetMetadata()
 			assert.Equal(t, "status_rejected", md.Headers["dlq-error-class"])
 		})
 	}
@@ -203,9 +202,10 @@ func TestTransformPassesHealthyStatuses(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Len(t, resp.GetEvents(), 1)
+			require.Empty(t, resp.GetErrorEvents())
 
 			md := resp.GetEvents()[0].GetMetadata()
-			assert.Equal(t, "quanta-output", md.Headers["__topic"])
+			assert.NotContains(t, md.Headers, "__topic")
 		})
 	}
 }

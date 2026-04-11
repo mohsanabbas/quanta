@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -69,7 +70,7 @@ func newTestSink(fp *fakeAsyncProducer) *SaramaSink {
 		prod:   fp,
 		doneCh: make(chan struct{}),
 	}
-	go s.pump()
+	go s.ackLoop(context.Background())
 	return s
 }
 
@@ -116,7 +117,7 @@ func TestSaramaSink_Publish_Enqueues(t *testing.T) {
 	assert.Equal(t, "test-topic", msg.Topic)
 	inf, ok := msg.Metadata.(*inflight)
 	require.True(t, ok)
-	assert.Equal(t, tok, inf.checkpoint)
+	assert.Equal(t, tok, inf.frame.Checkpoint)
 }
 
 func TestSaramaSink_Publish_ContextCancelled(t *testing.T) {
@@ -153,7 +154,7 @@ func TestSaramaSink_Publish_NoTopic(t *testing.T) {
 		prod:   fp,
 		doneCh: make(chan struct{}),
 	}
-	go s.pump()
+	go s.ackLoop(context.Background())
 	defer func() {
 		fp.AsyncClose()
 		<-s.doneCh
@@ -164,7 +165,7 @@ func TestSaramaSink_Publish_NoTopic(t *testing.T) {
 	assert.Contains(t, err.Error(), "no topic resolved")
 }
 
-func TestSaramaSink_PumpAcksOnSuccess(t *testing.T) {
+func TestSaramaSink_AckLoopAcksOnSuccess(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
@@ -172,7 +173,7 @@ func TestSaramaSink_PumpAcksOnSuccess(t *testing.T) {
 
 	var acked atomic.Int32
 	var ackedTok atomic.Value
-	s.BindAck(func(tok *pb.CheckpointToken) {
+	s.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
 		acked.Add(1)
 		ackedTok.Store(tok)
 	})
@@ -191,14 +192,14 @@ func TestSaramaSink_PumpAcksOnSuccess(t *testing.T) {
 	assert.Equal(t, tok, ackedTok.Load())
 }
 
-func TestSaramaSink_PumpWithholdsAckOnError(t *testing.T) {
+func TestSaramaSink_AckLoopWithholdsAckOnError(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
 	s := newTestSink(fp)
 
 	var acked atomic.Int32
-	s.BindAck(func(tok *pb.CheckpointToken) {
+	s.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
 		acked.Add(1)
 	})
 
@@ -218,14 +219,14 @@ func TestSaramaSink_PumpWithholdsAckOnError(t *testing.T) {
 	assert.Equal(t, int32(0), acked.Load())
 }
 
-func TestSaramaSink_PumpDrainsAllInFlight(t *testing.T) {
+func TestSaramaSink_AckLoopDrainsAllInFlight(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
 	s := newTestSink(fp)
 
 	var acked atomic.Int32
-	s.BindAck(func(_ *pb.CheckpointToken) { acked.Add(1) })
+	s.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
 
 	const n = 5
 	for i := range n {
@@ -249,7 +250,7 @@ func TestSaramaSink_PumpDrainsAllInFlight(t *testing.T) {
 	assert.Equal(t, int32(3), acked.Load())
 }
 
-func TestSaramaSink_Close_WaitsPump(t *testing.T) {
+func TestSaramaSink_Close_WaitsAckLoop(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
@@ -271,9 +272,9 @@ func TestSaramaSink_BindAck(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	s := &SaramaSink{}
 	var called bool
-	s.BindAck(func(_ *pb.CheckpointToken) { called = true })
+	s.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { called = true })
 	require.NotNil(t, s.ack)
-	s.ack(nil)
+	s.ack(context.Background(), nil)
 	assert.True(t, called)
 }
 
@@ -286,7 +287,7 @@ func TestSaramaSink_HeaderTopicOverride(t *testing.T) {
 		prod:   fp,
 		doneCh: make(chan struct{}),
 	}
-	go s.pump()
+	go s.ackLoop(context.Background())
 	defer func() {
 		fp.AsyncClose()
 		<-s.doneCh
@@ -303,4 +304,123 @@ func TestSaramaSink_HeaderTopicOverride(t *testing.T) {
 	require.NoError(t, s.Publish(context.Background(), f))
 	msg := <-fp.inputCh
 	assert.Equal(t, "override-topic", msg.Topic)
+}
+
+func TestSaramaSink_ImplementsNackAware(t *testing.T) {
+	t.Parallel()
+	var _ sink.NackAware = (*SaramaSink)(nil)
+}
+
+func TestSaramaSink_BindNack(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	s := &SaramaSink{}
+	var called bool
+	s.BindNack(func(_ context.Context, _ *pb.Frame, _ error) { called = true })
+	require.NotNil(t, s.nack)
+	s.nack(context.Background(), &pb.Frame{}, errors.New("test"))
+	assert.True(t, called)
+}
+
+func TestSaramaSink_AckLoopNacksOnError(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	fp := newFakeAsyncProducer()
+	s := newTestSink(fp)
+
+	var nacked atomic.Int32
+	var nackedFrame atomic.Value
+	s.BindNack(func(_ context.Context, f *pb.Frame, _ error) {
+		nacked.Add(1)
+		nackedFrame.Store(f)
+	})
+
+	frame := &pb.Frame{
+		Key:   []byte("k"),
+		Value: []byte("nack-me"),
+		Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
+			Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: 42},
+		}},
+	}
+
+	require.NoError(t, s.Publish(context.Background(), frame))
+	msg := <-fp.inputCh
+
+	// Simulate broker error for this message.
+	fp.errorCh <- &sarama.ProducerError{
+		Msg: msg,
+		Err: errors.New("broker rejected"),
+	}
+
+	fp.AsyncClose()
+	<-s.doneCh
+
+	require.Equal(t, int32(1), nacked.Load(), "nack must be called once")
+	got := nackedFrame.Load().(*pb.Frame)
+	assert.Equal(t, []byte("nack-me"), got.Value, "nacked frame must carry original value")
+}
+
+func TestSaramaSink_AckLoopNackFallback_NoHandler(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	fp := newFakeAsyncProducer()
+	s := newTestSink(fp)
+	// No BindNack — nack is nil, should fall back to log-only (no panic).
+
+	frame := &pb.Frame{
+		Key:   []byte("k"),
+		Value: []byte("v"),
+		Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
+			Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: 1},
+		}},
+	}
+
+	require.NoError(t, s.Publish(context.Background(), frame))
+	msg := <-fp.inputCh
+
+	fp.errorCh <- &sarama.ProducerError{
+		Msg: msg,
+		Err: errors.New("broker rejected"),
+	}
+
+	fp.AsyncClose()
+	<-s.doneCh
+	// No panic, no nack — just log. Test passes by not crashing.
+}
+
+func TestSaramaSink_AckLoopMixedAckNack(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	fp := newFakeAsyncProducer()
+	s := newTestSink(fp)
+
+	var acked atomic.Int32
+	var nacked atomic.Int32
+	s.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
+	s.BindNack(func(_ context.Context, _ *pb.Frame, _ error) { nacked.Add(1) })
+
+	// Publish 3 messages.
+	frames := make([]*pb.Frame, 3)
+	msgs := make([]*sarama.ProducerMessage, 3)
+	for i := range 3 {
+		frames[i] = &pb.Frame{
+			Key:   []byte("k"),
+			Value: []byte("v"),
+			Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
+				Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: int64(i)},
+			}},
+		}
+		require.NoError(t, s.Publish(context.Background(), frames[i]))
+		msgs[i] = <-fp.inputCh
+	}
+
+	// msg 0: success, msg 1: error, msg 2: success
+	fp.successCh <- msgs[0]
+	fp.errorCh <- &sarama.ProducerError{Msg: msgs[1], Err: errors.New("fail")}
+	fp.successCh <- msgs[2]
+
+	fp.AsyncClose()
+	<-s.doneCh
+
+	assert.Equal(t, int32(2), acked.Load(), "2 successes → 2 acks")
+	assert.Equal(t, int32(1), nacked.Load(), "1 error → 1 nack")
 }

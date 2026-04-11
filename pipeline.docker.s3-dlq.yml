@@ -1,0 +1,70 @@
+# Pipeline: Kafka->cloudevents->S3 sink + Plugin error_sink + Engine DLQ
+#
+# Three error paths:
+#   1. Plugin error_events: invalid CloudEvents -> error_events field
+#      Routed by the engine to error_sink (quanta-dlq Kafka topic).
+#   2. Engine DLQ (S3 nack): S3 upload failures -> coord.Nack -> quanta-engine-dlq
+#   3. DeadLetterFn: transform infra failures (gRPC timeout) -> logged
+
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.docker.yml
+
+transformers:
+  - name: cloudevents
+    type: grpc
+    address: "cloudevents:50052"
+    timeout_ms: 2000
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+    error_sink:
+      sink: kafka
+      config:
+        brokers: ["kafka:29092"]
+        topic: "quanta-dlq"
+        acks: "all"
+        version: "3.6.0"
+        client_id: "quanta-error-sink"
+        timeout: 10s
+
+sinks:
+  - s3
+
+sink_configs:
+  s3:
+    bucket: "quanta-output"
+    region: "us-east-1"
+    prefix: "events"
+    file_suffix: ".jsonl"
+    format: "jsonl"
+    batch_size: 100
+    flush_interval: 5s
+    auth_strategy: "static"
+    access_key_id: "test"
+    secret_access_key: "test"
+    endpoint: "http://localstack:4566"
+    path_style: true
+
+dlq:
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["kafka:29092"]
+    topic: "quanta-engine-dlq"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-engine-dlq"
+    timeout: 10s
+    retry_max: 3
+    retry_backoff_min: 100ms
+    retry_backoff_max: 1s
+
+debug:
+  per_frame_delay_ms: 0
+  print_counter: true
+  ack_batch_size: 1
+  ack_flush_ms: 0

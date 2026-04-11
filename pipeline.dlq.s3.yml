@@ -1,0 +1,49 @@
+# Pipeline: Kafka → uppercase → S3 sink + DLQ (Kafka)
+# Run locally: bin/uppercase on :50052, Kafka on localhost:9094, LocalStack on localhost:4566
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.yml
+
+transformers:
+  - name: uppercase
+    type: grpc
+    address: "localhost:50052"
+    timeout_ms: 1000
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+
+sinks:
+  - s3
+
+sink_configs:
+  s3:
+    bucket: "quanta-output"
+    region: "us-east-1"
+    prefix: "events"
+    file_suffix: ".jsonl"
+    format: "jsonl"
+    batch_size: 100
+    flush_interval: 5s
+    auth_strategy: "static"
+    access_key_id: "test"
+    secret_access_key: "test"
+    endpoint: "http://localhost:4566"
+    path_style: true
+
+dlq:
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["localhost:9094"]
+    topic: "quanta-dlq"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-dlq-s3"
+    timeout: 10s
+    retry_max: 3
+    retry_backoff_min: 100ms
+    retry_backoff_max: 1s

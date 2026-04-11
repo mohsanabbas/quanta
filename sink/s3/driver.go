@@ -26,8 +26,9 @@ type Client interface {
 }
 
 var (
-	_ sink.Adapter  = (*Driver)(nil)
-	_ sink.AckAware = (*Driver)(nil)
+	_ sink.Adapter   = (*Driver)(nil)
+	_ sink.AckAware  = (*Driver)(nil)
+	_ sink.NackAware = (*Driver)(nil)
 )
 
 type Driver struct {
@@ -35,6 +36,7 @@ type Driver struct {
 	client  Client
 	encoder Encoder
 	ack     sink.EmitFn
+	nack    sink.NackFn
 	pool    *sync.Pool
 
 	mu      sync.Mutex
@@ -100,11 +102,15 @@ func (d *Driver) BindAck(fn sink.EmitFn) {
 	d.ack = fn
 }
 
+func (d *Driver) BindNack(fn sink.NackFn) {
+	d.nack = fn
+}
+
 func (d *Driver) Publish(_ context.Context, f *pb.Frame) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.current.append(f.Value, f.Checkpoint)
+	d.current.append(f.Value, f.Checkpoint, f)
 
 	if d.current.full() {
 		sealed := d.current
@@ -207,11 +213,13 @@ func (d *Driver) flushPartial(ctx context.Context) {
 func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 	records := b.records[:b.len()]
 	checkpoints := b.checkpoints[:b.len()]
+	frames := b.frames[:b.len()]
 
 	data, err := d.encoder.Encode(records)
 	if err != nil {
-		logging.L().ErrorContext(ctx, "s3 sink: encode failed, withholding ack for redelivery",
+		logging.L().ErrorContext(ctx, "s3 sink: encode failed",
 			"error", err, "frames", len(records))
+		d.nackAll(ctx, frames, err)
 		d.recycleBatch(b)
 		return
 	}
@@ -225,22 +233,32 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 		ContentType: aws.String(d.encoder.ContentType()),
 	})
 	if err != nil {
-		logging.L().ErrorContext(ctx, "s3 sink: upload failed, withholding ack for redelivery",
+		logging.L().ErrorContext(ctx, "s3 sink: upload failed",
 			"error", err, "key", key, "frames", len(records))
+		d.nackAll(ctx, frames, err)
 		d.recycleBatch(b)
 		return
 	}
 
-	d.ackAll(checkpoints)
+	d.ackAll(ctx, checkpoints)
 	d.recycleBatch(b)
 }
 
-func (d *Driver) ackAll(checkpoints []*pb.CheckpointToken) {
+func (d *Driver) ackAll(ctx context.Context, checkpoints []*pb.CheckpointToken) {
 	if d.ack == nil {
 		return
 	}
 	for _, tok := range checkpoints {
-		d.ack(tok)
+		d.ack(ctx, tok)
+	}
+}
+
+func (d *Driver) nackAll(ctx context.Context, frames []*pb.Frame, err error) {
+	if d.nack == nil {
+		return
+	}
+	for _, f := range frames {
+		d.nack(ctx, f, err)
 	}
 }
 

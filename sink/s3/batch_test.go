@@ -29,7 +29,7 @@ func TestBatchAppendAndFull(t *testing.T) {
 
 			for i := range tt.give {
 				tok := &pb.CheckpointToken{}
-				b.append([]byte{byte(i)}, tok)
+				b.append([]byte{byte(i)}, tok, nil)
 			}
 
 			assert.Equal(t, tt.wantLen, b.len())
@@ -42,7 +42,7 @@ func TestBatchClonesSafely(t *testing.T) {
 	b := newBatch(4)
 
 	src := []byte("original")
-	b.append(src, &pb.CheckpointToken{})
+	b.append(src, &pb.CheckpointToken{}, nil)
 
 	src[0] = 'X'
 	assert.Equal(t, []byte("original"), b.records[0], "batch must hold an independent copy")
@@ -53,8 +53,8 @@ func TestBatchCheckpoints(t *testing.T) {
 
 	tok1 := &pb.CheckpointToken{}
 	tok2 := &pb.CheckpointToken{}
-	b.append([]byte("a"), tok1)
-	b.append([]byte("b"), tok2)
+	b.append([]byte("a"), tok1, nil)
+	b.append([]byte("b"), tok2, nil)
 
 	require.Len(t, b.checkpoints[:b.len()], 2)
 	assert.Same(t, tok1, b.checkpoints[0])
@@ -63,8 +63,8 @@ func TestBatchCheckpoints(t *testing.T) {
 
 func TestBatchReset(t *testing.T) {
 	b := newBatch(2)
-	b.append([]byte("a"), &pb.CheckpointToken{})
-	b.append([]byte("b"), &pb.CheckpointToken{})
+	b.append([]byte("a"), &pb.CheckpointToken{}, nil)
+	b.append([]byte("b"), &pb.CheckpointToken{}, nil)
 
 	b.reset()
 
@@ -77,8 +77,8 @@ func TestBatchReset(t *testing.T) {
 
 func TestBatchSizeTracksBytes(t *testing.T) {
 	b := newBatch(10)
-	b.append([]byte("hello"), &pb.CheckpointToken{})
-	b.append([]byte("world!!!"), &pb.CheckpointToken{})
+	b.append([]byte("hello"), &pb.CheckpointToken{}, nil)
+	b.append([]byte("world!!!"), &pb.CheckpointToken{}, nil)
 
 	assert.Equal(t, 13, b.size)
 }
@@ -91,7 +91,7 @@ func TestBatchPool(t *testing.T) {
 	assert.Equal(t, 4, cap(b.records))
 	assert.Equal(t, 0, b.len())
 
-	b.append([]byte("x"), &pb.CheckpointToken{})
+	b.append([]byte("x"), &pb.CheckpointToken{}, nil)
 	b.reset()
 	pool.Put(b)
 
@@ -108,7 +108,7 @@ func TestBatchPoolConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			b := pool.Get().(*batch)
-			b.append([]byte("data"), &pb.CheckpointToken{})
+			b.append([]byte("data"), &pb.CheckpointToken{}, nil)
 			b.reset()
 			pool.Put(b)
 		}()
