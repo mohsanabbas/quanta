@@ -144,11 +144,22 @@ sequenceDiagram
   participant Runner
   participant Coordinator as AckCoordinator
   participant DeadLetter as DeadLetterFn
+  participant DLQ as DLQ Sink
 
+  Note over Runner,DLQ: Path A — Sync sink publish fails
   Runner->>Coordinator: Barrier(tok, refs=2)
   Runner->>Runner: publishAll fails
   Runner->>Coordinator: barrier.Abort()
   Note over Coordinator: CAS Live→Aborted, no commit
   Runner->>Coordinator: Fail(stage, frame, err)
   Coordinator->>DeadLetter: fn(stage, frame, err)
+
+  Note over Runner,DLQ: Path B — AckAware sink delivery failure (Nack)
+  Runner->>Coordinator: Barrier(tok, refs=2)
+  Runner->>Runner: publishAll succeeds (non-blocking)
+  Note over Runner: Async: sink permanently fails to deliver
+  Runner-->>Coordinator: Nack(ctx, frame, err)
+  Coordinator->>Coordinator: Abort barrier
+  Coordinator->>DLQ: Publish(dlq_frame)
+  Note over Coordinator: DLQ success → commit offset
 ```

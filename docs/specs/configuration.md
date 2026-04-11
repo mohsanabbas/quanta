@@ -23,6 +23,11 @@ transformers:
     retry_policy:
       attempts: 3
       backoff_ms: 200
+    error_sink:                   # Optional: per-transformer error sink
+      sink: kafka
+      config:
+        topic: "enrich-errors"
+        brokers: ["localhost:9094"]
 
 sinks:
   - kafka
@@ -32,6 +37,16 @@ sink_configs:
     brokers: ["localhost:9094"]
     topic: "quanta-output"
     acks: "all"
+
+dlq:                              # Optional: engine-managed DLQ
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["localhost:9094"]
+    topic: "quanta-engine-dlq"
+    acks: "all"
+  include_original_headers: true
+  include_error_metadata: true
 ```
 
 ### Public source config (`kafka_source.yml`)
@@ -74,7 +89,7 @@ commit_step: 500            # Offset-based commits
 **File Naming Examples**:
 - `kafka_source.yml` → `kafka_source.tuning.yml`
 - `kafka_source.docker.yml` → `kafka_source.docker.tuning.yml`
-- `config/prod.yaml` → `config/prod.tuning.yaml`
+- `topology/prod.yaml` → `topology/prod.tuning.yaml`
 
 ## Environment overrides
 
