@@ -38,7 +38,7 @@ type NackAware interface {
 
 During pipeline wiring, `Runner.AddSink` detects `NackAware` sinks and calls `BindNack(coord.Nack)`, binding the sink to the `AckCoordinator`. When a sink permanently fails to deliver a frame, it invokes `NackFn` — the coordinator routes the frame to the engine-managed DLQ sink (if configured) and then acks the checkpoint token so the pipeline keeps flowing.
 
-A sink can implement both `AckAware` and `NackAware`. On success it calls `EmitFn(tok)`; on failure it calls `NackFn(frame, err)`. If `NackAware` is not bound (no DLQ configured), the sink falls back to withholding the ack — the frame will be redelivered by the source.
+A sink can implement both `AckAware` and `NackAware`. On success it calls `EmitFn(tok)`; on failure it calls `NackFn(frame, err)`. If no DLQ is configured, the coordinator does not commit the checkpoint token after the nack, so the frame will be redelivered by the source.
 
 ### AckAware vs Synchronous Sinks
 
@@ -93,7 +93,7 @@ The S3 sink batches frames and uploads on flush:
 
 - `uploadBatch` collects checkpoint tokens **and frames** from all entries in the batch.
 - On **success**, `ackAll()` calls `EmitFn(ctx, tok)` for every token in the batch.
-- On **failure** (encode error or `PutObject` error), `nackAll()` calls `NackFn(ctx, frame, err)` for every frame in the batch — routing them to the engine DLQ. If `NackAware` is not bound, the nack is a no-op and the ack is withheld for redelivery.
+- On **failure** (encode error or `PutObject` error), `nackAll()` calls `NackFn(ctx, frame, err)` for every frame in the batch — routing them to the engine DLQ. If no DLQ is configured, the coordinator withholds the ack for redelivery.
 
 ## Ordering & Idempotence
 

@@ -166,7 +166,7 @@ Sinks that can detect per‑message delivery failure implement `NackAware`:
 
 - `BindNack(NackFn)` – where `NackFn = func(ctx context.Context, frame *pb.Frame, err error)`. Binds a callback invoked when the sink permanently fails to deliver a frame. The AckCoordinator routes the frame to the engine DLQ sink (if configured) then acks the checkpoint token so the pipeline keeps flowing.
 
-A sink can implement both `AckAware` and `NackAware`. If `NackAware` is not bound (no DLQ configured), the sink falls back to withholding the ack for redelivery by the source.
+A sink can implement both `AckAware` and `NackAware`. If no DLQ is configured, the coordinator does not commit the checkpoint token after the nack, so the frame will be redelivered by the source.
 
 The current implementation includes:
 
