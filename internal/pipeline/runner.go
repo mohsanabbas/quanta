@@ -53,6 +53,9 @@ type transformStage struct {
 }
 
 func NewRunner(coord *AckCoordinator) *Runner {
+	if coord == nil {
+		coord = NewAckCoordinator()
+	}
 	return &Runner{
 		stages:    make([]transformStage, 0, 4),
 		sinks:     make([]sink.Adapter, 0, 2),
@@ -100,7 +103,11 @@ func (r *Runner) Start(ctx context.Context) error {
 			return r.pushFrame(runCtx, frame)
 		})
 		if err != nil && ctx.Err() == nil {
-			r.sourceErr <- qerr.Pipeline("source-run", err)
+			select {
+			case r.sourceErr <- qerr.Pipeline("source-run", err):
+			default:
+				slog.Warn("engine: dropping source error; no receiver", "error", err)
+			}
 		}
 	}()
 	return nil

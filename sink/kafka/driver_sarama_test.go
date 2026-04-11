@@ -233,9 +233,9 @@ func TestSaramaSink_PumpDrainsAllInFlight(t *testing.T) {
 		require.NoError(t, s.Publish(context.Background(), testFrame("k", "v", tok)))
 	}
 
-	for range n {
+	for i := range n {
 		msg := <-fp.inputCh
-		if msg.Offset%2 == 0 {
+		if i%2 == 0 {
 			fp.successCh <- msg
 		} else {
 			fp.errorCh <- &sarama.ProducerError{Msg: msg, Err: sarama.ErrOutOfBrokers}
