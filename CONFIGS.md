@@ -5,6 +5,7 @@ This document describes the versioned YAML schemas for pipeline and Kafka source
 ## topology/pipeline.yml (schema_version: v1)
 
 Top-level fields:
+
 - **schema_version**: string (required) — currently "v1"
 - **source**: object — stream source configuration
   - **kind**: string — currently "kafka"
@@ -86,12 +87,12 @@ schema_version: v1
 source:
   kind: kafka
   driver: sarama
-  config: kafka_source.docker.yml  # Docker-specific config
+  config: kafka_source.docker.yml # Docker-specific config
 
 transformers:
   - name: uppercase
     type: grpc
-    address: "uppercase:50052"      # Service name in Docker network
+    address: "uppercase:50052" # Service name in Docker network
     timeout_ms: 1000
     retry_policy:
       attempts: 3
@@ -102,7 +103,7 @@ sinks:
 
 sink_configs:
   kafka:
-    brokers: ["kafka:29092"]        # Internal Docker network
+    brokers: ["kafka:29092"] # Internal Docker network
     topic: "quanta-output"
     acks: "all"
 ```
@@ -172,6 +173,7 @@ Performance and operational tuning parameters:
 ### File Naming Convention
 
 The tuning file is auto-discovered:
+
 - `kafka_source.yml` → `kafka_source.tuning.yml`
 - `kafka_source.docker.yml` → `kafka_source.docker.tuning.yml`
 - `topology/prod.yaml` → `topology/prod.tuning.yaml`
@@ -179,22 +181,22 @@ The tuning file is auto-discovered:
 ### Example
 
 ```yaml
-inflight_bytes: 268435456   # 256 MiB
-inflight_msgs: 4096         # Concurrent messages
-window_bits: 8192           # 2× inflight_msgs for out-of-order acks
-commit_interval: 5s         # Commit at least every 5 seconds
-commit_step: 500            # Commit when base advances by 500 offsets
+inflight_bytes: 268435456 # 256 MiB
+inflight_msgs: 4096 # Concurrent messages
+window_bits: 8192 # 2× inflight_msgs for out-of-order acks
+commit_interval: 5s # Commit at least every 5 seconds
+commit_step: 500 # Commit when base advances by 500 offsets
 ```
 
 ### Defaults
 
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| inflight_bytes | 256 MiB | Combined backpressure only |
-| inflight_msgs | 4096 | All backpressure strategies |
-| window_bits | 4096 | Must be ≥ inflight_msgs |
-| commit_interval | 5s | Periodic and hybrid strategies |
-| commit_step | 500 | Hybrid strategy only |
+| Parameter       | Default | Notes                          |
+| --------------- | ------- | ------------------------------ |
+| inflight_bytes  | 256 MiB | Combined backpressure only     |
+| inflight_msgs   | 4096    | All backpressure strategies    |
+| window_bits     | 4096    | Must be ≥ inflight_msgs        |
+| commit_interval | 5s      | Periodic and hybrid strategies |
+| commit_step     | 500     | Hybrid strategy only           |
 
 ---
 
@@ -207,6 +209,7 @@ Override configuration at runtime without editing files:
 Prefix: `QUANTA_SOURCE__`
 
 Examples:
+
 ```bash
 export QUANTA_SOURCE__BROKERS="kafka1:9092,kafka2:9092"
 export QUANTA_SOURCE__GROUP_ID="my-consumer"
@@ -219,6 +222,7 @@ export QUANTA_SOURCE__SARAMA_VERBOSE="true"
 Prefix: `QUANTA_TUNING__`
 
 Examples:
+
 ```bash
 export QUANTA_TUNING__INFLIGHT_MSGS=8192
 export QUANTA_TUNING__COMMIT_INTERVAL=10s
