@@ -118,9 +118,9 @@ message was processed successfully or DLQ'd.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  1. Plugin-Owned DLQ (business logic)                       │
-│     Transformer returns Status_OK with DLQ envelope.        │
-│     Engine sees success → sinks publish → ack → commit.     │
+│  1. Plugin error_events → error_sink (business logic)       │
+│     Transformer returns error_events in TransformResponse.  │
+│     Engine routes them to the per-stage error_sink.          │
 │     The transformer decides what's invalid.                  │
 ├─────────────────────────────────────────────────────────────┤
 │  2. Engine-Owned Nack DLQ (sink delivery failure) ← THIS    │
@@ -204,13 +204,13 @@ sequenceDiagram
 
 **Files:** `sink/kafka/driver_sarama.go`, `sink/kafka/driver_sarama_test.go`
 
-| #   | Task                                   | Detail                                                                                  |
-| --- | -------------------------------------- | --------------------------------------------------------------------------------------- |
-| 3.1 | Change `inflight` to carry `*pb.Frame` | Need full frame for DLQ, not just checkpoint                                            |
-| 3.2 | Implement `BindNack` on `SaramaSink`   | Satisfy `NackAware` interface                                                           |
-| 3.3 | Update `ackLoop()` error branch         | Call `nackFromMetadata` when nack is bound, fall back to log-only when not              |
-| 3.4 | Update `Publish` to store full frame   | `Metadata: &inflight{frame: f}`                                                         |
-| 3.5 | Compile-time check                     | `var _ sink.NackAware = (*SaramaSink)(nil)`                                             |
+| #   | Task                                   | Detail                                                                                           |
+| --- | -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 3.1 | Change `inflight` to carry `*pb.Frame` | Need full frame for DLQ, not just checkpoint                                                     |
+| 3.2 | Implement `BindNack` on `SaramaSink`   | Satisfy `NackAware` interface                                                                    |
+| 3.3 | Update `ackLoop()` error branch        | Call `nackFromMetadata` when nack is bound, fall back to log-only when not                       |
+| 3.4 | Update `Publish` to store full frame   | `Metadata: &inflight{frame: f}`                                                                  |
+| 3.5 | Compile-time check                     | `var _ sink.NackAware = (*SaramaSink)(nil)`                                                      |
 | 3.6 | Tests                                  | `TestAckLoopNacksOnError`, `TestAckLoopNackFallback_NoHandler`, `TestAckLoopDrains_MixedAckNack` |
 
 **Gate:** Kafka ackLoop nacks on broker errors, falls back gracefully without handler.
