@@ -3,8 +3,10 @@ package s3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -245,6 +247,33 @@ func TestDriverClonesSafely(t *testing.T) {
 func TestDriverImplementsInterfaces(t *testing.T) {
 	var _ sink.Adapter = (*Driver)(nil)
 	var _ sink.AckAware = (*Driver)(nil)
+}
+
+func TestDriverUploadError_WithholdsAck(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	spy := &spyClient{err: errors.New("S3 unavailable")}
+	d := newTestDriver(t, spy)
+	defer d.Close(context.Background())
+
+	var acked atomic.Int32
+	d.BindAck(func(_ *pb.CheckpointToken) { acked.Add(1) })
+
+	ctx := context.Background()
+	for i := range 3 {
+		tok := &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
+			Kafka: &pb.KafkaOffset{Offset: int64(i)},
+		}}
+		require.NoError(t, d.Publish(ctx, &pb.Frame{Value: []byte("x"), Checkpoint: tok}))
+	}
+
+	require.Eventually(t, func() bool {
+		spy.mu.Lock()
+		defer spy.mu.Unlock()
+		return len(spy.calls) == 1
+	}, 2*time.Second, 10*time.Millisecond, "expected PutObject call")
+
+	assert.Equal(t, int32(0), acked.Load(), "ack must be withheld on upload failure")
 }
 
 func newTestDriver(t *testing.T, spy *spyClient) *Driver {

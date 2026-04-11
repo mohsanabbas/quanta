@@ -210,8 +210,8 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 
 	data, err := d.encoder.Encode(records)
 	if err != nil {
-		logging.L().WarnContext(ctx, "s3 sink: encode", "error", err)
-		d.ackAll(checkpoints)
+		logging.L().ErrorContext(ctx, "s3 sink: encode failed, withholding ack for redelivery",
+			"error", err, "frames", len(records))
 		d.recycleBatch(b)
 		return
 	}
@@ -225,8 +225,8 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 		ContentType: aws.String(d.encoder.ContentType()),
 	})
 	if err != nil {
-		logging.L().WarnContext(ctx, "s3 sink: upload", "error", err, "key", key)
-		d.ackAll(checkpoints)
+		logging.L().ErrorContext(ctx, "s3 sink: upload failed, withholding ack for redelivery",
+			"error", err, "key", key, "frames", len(records))
 		d.recycleBatch(b)
 		return
 	}

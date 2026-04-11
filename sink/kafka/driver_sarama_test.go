@@ -191,7 +191,7 @@ func TestSaramaSink_PumpAcksOnSuccess(t *testing.T) {
 	assert.Equal(t, tok, ackedTok.Load())
 }
 
-func TestSaramaSink_PumpAcksOnError(t *testing.T) {
+func TestSaramaSink_PumpWithholdsAckOnError(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
@@ -215,7 +215,7 @@ func TestSaramaSink_PumpAcksOnError(t *testing.T) {
 	fp.AsyncClose()
 	<-s.doneCh
 
-	assert.Equal(t, int32(1), acked.Load())
+	assert.Equal(t, int32(0), acked.Load())
 }
 
 func TestSaramaSink_PumpDrainsAllInFlight(t *testing.T) {
@@ -245,7 +245,8 @@ func TestSaramaSink_PumpDrainsAllInFlight(t *testing.T) {
 	fp.AsyncClose()
 	<-s.doneCh
 
-	assert.Equal(t, int32(n), acked.Load())
+	// Only successes (i=0,2,4) get acked; errors are withheld.
+	assert.Equal(t, int32(3), acked.Load())
 }
 
 func TestSaramaSink_Close_WaitsPump(t *testing.T) {

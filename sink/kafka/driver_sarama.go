@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	pb "quanta/api/proto/v1"
@@ -181,8 +182,11 @@ func (s *SaramaSink) pump() {
 				s.flushSuccesses()
 				return
 			}
-			if pe != nil {
-				s.ackFromMetadata(pe.Msg.Metadata)
+			if pe != nil && pe.Msg != nil {
+				slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
+					"topic", pe.Msg.Topic,
+					"err", pe.Err,
+				)
 			}
 		}
 	}
@@ -201,8 +205,11 @@ func (s *SaramaSink) flushErrors() {
 			if !ok {
 				return
 			}
-			if pe != nil {
-				s.ackFromMetadata(pe.Msg.Metadata)
+			if pe != nil && pe.Msg != nil {
+				slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
+					"topic", pe.Msg.Topic,
+					"err", pe.Err,
+				)
 			}
 		default:
 			return
