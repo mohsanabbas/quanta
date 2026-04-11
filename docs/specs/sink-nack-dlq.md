@@ -1,8 +1,8 @@
 # Epic: Sink Nack & Engine-Managed DLQ
 
-> **Status:** Planned
+> **Status:** Implemented (PR #16, merged)
 > **Depends on:** AckCoordinator (PR #15, merged)
-> **Branch:** `feat/sink-nack-dlq`
+> **Branch:** `feat/sink-nack-dlq` → merged to `main`
 
 ---
 
@@ -77,7 +77,7 @@ behaviour is preserved.
 
 ```go
 // NackFn is called when a sink permanently fails to deliver a frame.
-type NackFn func(frame *pb.Frame, err error)
+type NackFn func(ctx context.Context, frame *pb.Frame, err error)
 
 // NackAware sinks can signal per-message delivery failure.
 type NackAware interface {
@@ -90,7 +90,7 @@ Sinks that don't implement `NackAware` keep current behaviour.
 ### New: `AckCoordinator.Nack`
 
 ```go
-func (c *AckCoordinator) Nack(frame *pb.Frame, cause error)
+func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error)
 ```
 
 1. Abort the barrier (CAS `Live → Aborted`).
