@@ -208,12 +208,12 @@ sequenceDiagram
 | --- | -------------------------------------- | --------------------------------------------------------------------------------------- |
 | 3.1 | Change `inflight` to carry `*pb.Frame` | Need full frame for DLQ, not just checkpoint                                            |
 | 3.2 | Implement `BindNack` on `SaramaSink`   | Satisfy `NackAware` interface                                                           |
-| 3.3 | Update `pump()` error branch           | Call `nackFromMetadata` when nack is bound, fall back to log-only when not              |
+| 3.3 | Update `ackLoop()` error branch         | Call `nackFromMetadata` when nack is bound, fall back to log-only when not              |
 | 3.4 | Update `Publish` to store full frame   | `Metadata: &inflight{frame: f}`                                                         |
 | 3.5 | Compile-time check                     | `var _ sink.NackAware = (*SaramaSink)(nil)`                                             |
-| 3.6 | Tests                                  | `TestPumpNacksOnError`, `TestPumpNackFallback_NoHandler`, `TestPumpDrains_MixedAckNack` |
+| 3.6 | Tests                                  | `TestAckLoopNacksOnError`, `TestAckLoopNackFallback_NoHandler`, `TestAckLoopDrains_MixedAckNack` |
 
-**Gate:** Kafka pump nacks on broker errors, falls back gracefully without handler.
+**Gate:** Kafka ackLoop nacks on broker errors, falls back gracefully without handler.
 
 ### Phase 4 — S3 Sink NackAware
 

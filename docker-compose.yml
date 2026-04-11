@@ -4,7 +4,11 @@ services:
     container_name: quanta-kafka
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD-SHELL", "kafka-topics --bootstrap-server kafka:29092 --list || exit 1" ]
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-topics --bootstrap-server kafka:29092 --list || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -36,7 +40,7 @@ services:
   kafka-init:
     image: confluentinc/cp-kafka:7.9.0
     container_name: quanta-kafka-init
-    entrypoint: [ "/bin/bash", "-c" ]
+    entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         echo '⏳ Creating Kafka topics...'
@@ -51,6 +55,10 @@ services:
         kafka-topics --bootstrap-server kafka:29092 \
           --create --if-not-exists \
           --topic quanta-dlq \
+          --partitions 3 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic quanta-engine-dlq \
           --partitions 3 --replication-factor 1
         echo '✅ Topics ready:'
         kafka-topics --bootstrap-server kafka:29092 --describe \
@@ -147,7 +155,7 @@ services:
   localstack-init:
     image: amazon/aws-cli:latest
     container_name: quanta-localstack-init
-    entrypoint: [ "/bin/sh", "-c" ]
+    entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         echo '⏳ Waiting for LocalStack S3...'
@@ -184,6 +192,8 @@ services:
       - ./pipeline.docker.yml:/config/pipeline.docker.yml:ro
       - ./pipeline.docker.dual-dlq.yml:/config/pipeline.docker.dual-dlq.yml:ro
       - ./pipeline.docker.dual-dlq.fail.yml:/config/pipeline.docker.dual-dlq.fail.yml:ro
+      - ./pipeline.docker.s3-dlq.yml:/config/pipeline.docker.s3-dlq.yml:ro
+      - ./pipeline.docker.s3-dlq.fail.yml:/config/pipeline.docker.s3-dlq.fail.yml:ro
       - ./kafka_source.docker.yml:/config/kafka_source.docker.yml:ro
       - ./kafka_source.docker.tuning.yml:/config/kafka_source.docker.tuning.yml:ro
       - ./kafka_source.docker.auto.yml:/config/kafka_source.docker.auto.yml:ro

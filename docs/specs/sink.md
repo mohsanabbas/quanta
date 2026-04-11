@@ -60,13 +60,13 @@ sequenceDiagram
   Note over KafkaSink: returns immediately (non-blocking)
 
   AsyncProducer-->>KafkaSink: Successes channel
-  KafkaSink->>KafkaSink: pump() extracts inflight
+  KafkaSink->>KafkaSink: ackLoop() extracts inflight
   KafkaSink->>Coordinator: Ack(tok)
 ```
 
-- `Publish` attaches `&inflight{checkpoint: frame.Checkpoint}` as `msg.Metadata` and sends to `prod.Input()`.
-- `pump()` goroutine reads both `Successes` and `Errors` channels, extracts the `inflight` metadata, and calls `Ack(tok)` on both paths (at-least-once: the message was either delivered or the offset should advance past the error).
-- `Close` calls `AsyncClose()` and blocks on `<-doneCh` until `pump()` drains.
+- `Publish` attaches `&inflight{frame}` as `msg.Metadata` and sends to `prod.Input()`.
+- `ackLoop()` goroutine reads both `Successes` and `Errors` channels, extracts the `inflight` metadata, calls `Ack(tok)` on success and `Nack(frame, err)` on failure (if NackAware is bound).
+- `Close` calls `AsyncClose()` and blocks on `<-doneCh` until `ackLoop()` drains.
 
 ## S3 Sink (AckAware)
 
