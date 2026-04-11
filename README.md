@@ -279,7 +279,7 @@ inflight_msgs: 2000
 ```bash
 # Enable verbose Sarama logging
 # In topology/kafka_source.yml:
-samara_verbose: true
+sarama_verbose: true
 
 # Use stdout sink for debugging
 # In topology/pipeline.yml:
@@ -312,32 +312,6 @@ docs/
   specs/               Technical specifications
   guides/              User guides and tutorials
 topology/              Pipeline & source YAML configs
-```
-
-## Commit Modes
-
-### Auto Mode (High Throughput)
-
-- Offsets marked immediately after emit
-- Fast processing, fire-and-forget
-- ⚠️ Some message loss possible on crash
-- Use when: Speed > safety
-
-### E2E Mode (At-Least-Once)
-trap logic
-source/
-  kafka/               Kafka source driver (Sarama)
-sink/
-  kafka/               Kafka sink
-  s3/                  S3 sink (batched JSONL uploads)
-
-  stdout/              Debug sink
-examples/
-  transformers/        Sample gRPC transformers
-docs/
-  specs/               Technical specifications
-  guides/              User guides and tutorials
-
 ```
 
 ## Commit Modes
