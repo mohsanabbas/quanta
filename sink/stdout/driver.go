@@ -18,18 +18,15 @@ type Config struct {
 	DelayMS       int  `yaml:"delay_ms"`
 	PrintCounter  bool `yaml:"print_counter"`
 	BatchSize     int  `yaml:"ack_batch_size"`
-	FlushMS       int  `yaml:"ack_flush_ms"`
 	PrintValue    bool `yaml:"print_value"`
 	ValueMaxBytes int  `yaml:"value_max_bytes"`
 }
 
 type driver struct {
-	cfg Config
-	ack sink.EmitFn
-
+	cfg     Config
+	ack     sink.EmitFn
 	mu      sync.Mutex
 	pending []*pb.CheckpointToken
-	timer   *time.Timer
 }
 
 var (
@@ -84,50 +81,36 @@ func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 
 	d.mu.Lock()
 	d.pending = append(d.pending, f.Checkpoint)
-
-	if d.cfg.BatchSize > 0 && len(d.pending) >= d.cfg.BatchSize {
-		d.flushLocked()
-		d.mu.Unlock()
-		return nil
-	}
-
-	if d.cfg.FlushMS > 0 && d.timer == nil {
-		d.timer = time.AfterFunc(time.Duration(d.cfg.FlushMS)*time.Millisecond, d.timerFlush)
-	}
+	shouldFlush := d.cfg.BatchSize > 0 && len(d.pending) >= d.cfg.BatchSize
 	d.mu.Unlock()
+
+	if shouldFlush {
+		d.flush(ctx)
+	}
 	return nil
 }
 
-func (d *driver) Close(_ context.Context) error {
-	d.mu.Lock()
-	d.flushLocked()
-	d.mu.Unlock()
+func (d *driver) Close(ctx context.Context) error {
+	d.flush(ctx)
 	return nil
 }
 
 func (d *driver) BindAck(fn sink.EmitFn) { d.ack = fn }
 
-func (d *driver) timerFlush() {
+func (d *driver) flush(ctx context.Context) {
 	d.mu.Lock()
-	d.flushLocked()
-	d.mu.Unlock()
-}
-
-func (d *driver) flushLocked() {
-	if len(d.pending) == 0 || d.ack == nil {
-		d.stopTimerLocked()
+	if len(d.pending) == 0 {
+		d.mu.Unlock()
 		return
 	}
-	for _, t := range d.pending {
-		d.ack(t)
-	}
-	d.pending = d.pending[:0]
-	d.stopTimerLocked()
-}
+	tokens := d.pending
+	d.pending = nil
+	d.mu.Unlock()
 
-func (d *driver) stopTimerLocked() {
-	if d.timer != nil {
-		d.timer.Stop()
-		d.timer = nil
+	if d.ack == nil {
+		return
+	}
+	for _, tok := range tokens {
+		d.ack(ctx, tok)
 	}
 }

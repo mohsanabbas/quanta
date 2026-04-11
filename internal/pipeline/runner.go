@@ -40,6 +40,7 @@ type Runner struct {
 	coord *AckCoordinator
 
 	ackAwareSinks int
+	dlqSink       sink.Adapter
 
 	sourceErr chan error
 }
@@ -50,6 +51,7 @@ type transformStage struct {
 	timeout       time.Duration
 	retryAttempts int
 	retryBackoff  time.Duration
+	errorSink     sink.Adapter
 }
 
 func NewRunner(coord *AckCoordinator) *Runner {
@@ -73,20 +75,29 @@ func (r *Runner) AddSink(s sink.Adapter) {
 		ackAware.BindAck(r.coord.Ack)
 		r.ackAwareSinks++
 	}
+	if nackAware, ok := s.(sink.NackAware); ok {
+		nackAware.BindNack(r.coord.Nack)
+	}
 	r.sinks = append(r.sinks, s)
+}
+
+func (r *Runner) SetDLQSink(s sink.Adapter) {
+	r.coord.SetDLQSink(s)
+	r.dlqSink = s
 }
 
 func (r *Runner) SetDeadLetter(fn DeadLetterFn) {
 	r.coord.SetDeadLetter(fn)
 }
 
-func (r *Runner) AddTransformer(name string, c transform.Client, timeout time.Duration, attempts int, backoff time.Duration) {
+func (r *Runner) AddTransformer(name string, c transform.Client, timeout time.Duration, attempts int, backoff time.Duration, errSink sink.Adapter) {
 	r.stages = append(r.stages, transformStage{
 		name:          name,
 		client:        c,
 		timeout:       timeout,
 		retryAttempts: attempts,
 		retryBackoff:  backoff,
+		errorSink:     errSink,
 	})
 }
 
@@ -123,10 +134,20 @@ func (r *Runner) Close(ctx context.Context) error {
 		if err := st.client.Close(); err != nil {
 			errs = append(errs, qerr.Transform(st.name, "close", err))
 		}
+		if st.errorSink != nil {
+			if err := st.errorSink.Close(ctx); err != nil {
+				errs = append(errs, qerr.Sink(st.name+"-error-sink", "close", err))
+			}
+		}
 	}
 	for _, s := range r.sinks {
 		if err := s.Close(ctx); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if r.dlqSink != nil {
+		if err := r.dlqSink.Close(ctx); err != nil {
+			errs = append(errs, qerr.Sink("dlq", "close", err))
 		}
 	}
 	return errors.Join(errs...)
@@ -153,6 +174,10 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 	barrier := r.coord.Barrier(f.Checkpoint, refs)
 
 	if err := r.publishAll(ctx, frames); err != nil {
+		if r.coord.HasDLQ() {
+			r.coord.Nack(ctx, f, err)
+			return nil
+		}
 		barrier.Abort()
 		return err
 	}
@@ -167,7 +192,7 @@ func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
 func (r *Runner) runStage(ctx context.Context, st transformStage, in []*pb.Frame) []*pb.Frame {
 	out := make([]*pb.Frame, 0, len(in))
 	for _, f := range in {
-		outcome, events := r.callTransform(ctx, st, f)
+		outcome, events, errEvents := r.callTransform(ctx, st, f)
 		switch outcome {
 		case outcomeEvents:
 			out = append(out, toFrames(f, events)...)
@@ -176,17 +201,20 @@ func (r *Runner) runStage(ctx context.Context, st transformStage, in []*pb.Frame
 		case outcomeAbort:
 			// context cancelled, stop processing
 		}
+		if len(errEvents) > 0 {
+			r.publishErrorEvents(ctx, st, f, errEvents)
+		}
 	}
 	return out
 }
 
-func (r *Runner) callTransform(ctx context.Context, st transformStage, f *pb.Frame) (transformOutcome, []*pb.Event) {
+func (r *Runner) callTransform(ctx context.Context, st transformStage, f *pb.Frame) (transformOutcome, []*pb.Event, []*pb.Event) {
 	req := toRequest(f)
 	req.PluginId = st.name
 
 	for try := 0; ; try++ {
 		if ctx.Err() != nil {
-			return outcomeAbort, nil
+			return outcomeAbort, nil, nil
 		}
 
 		callCtx, cancel := r.stageContext(ctx, st.timeout)
@@ -198,14 +226,14 @@ func (r *Runner) callTransform(ctx context.Context, st transformStage, f *pb.Fra
 			if retry {
 				continue
 			}
-			return outcome, nil
+			return outcome, nil, nil
 		}
 
-		outcome, events, retry := r.handleResponse(ctx, st, f, resp, try)
+		outcome, events, errEvents, retry := r.handleResponse(ctx, st, f, resp, try)
 		if retry {
 			continue
 		}
-		return outcome, events
+		return outcome, events, errEvents
 	}
 }
 
@@ -234,34 +262,34 @@ func (r *Runner) handleTransportError(ctx context.Context, st transformStage, f 
 	return r.handlePermanentFailure(st, f, err), false
 }
 
-func (r *Runner) handleResponse(ctx context.Context, st transformStage, f *pb.Frame, resp *pb.TransformResponse, try int) (transformOutcome, []*pb.Event, bool) {
+func (r *Runner) handleResponse(ctx context.Context, st transformStage, f *pb.Frame, resp *pb.TransformResponse, try int) (transformOutcome, []*pb.Event, []*pb.Event, bool) {
 	switch resp.GetStatus() {
 	case pb.Status_OK:
-		return outcomeEvents, resp.GetEvents(), false
+		return outcomeEvents, resp.GetEvents(), resp.GetErrorEvents(), false
 
 	case pb.Status_DROP:
 		slog.Debug("transform frame dropped by plugin",
 			"stage", st.name,
 		)
-		return outcomeDrop, nil, false
+		return outcomeDrop, nil, nil, false
 
 	case pb.Status_RETRY:
 		switch r.retryOrExhaust(ctx, st, try) {
 		case retryProceed:
-			return 0, nil, true
+			return 0, nil, nil, true
 		case retryAbort:
-			return outcomeAbort, nil, false
+			return outcomeAbort, nil, nil, false
 		case retryExhaust:
 		}
 		return r.handlePermanentFailure(st, f,
-			errors.New("plugin returned RETRY but retries exhausted")), nil, false
+			errors.New("plugin returned RETRY but retries exhausted")), nil, nil, false
 
 	case pb.Status_ERROR:
 		slog.Error("transform plugin returned permanent ERROR",
 			"stage", st.name,
 		)
 		return r.handlePermanentFailure(st, f,
-			errors.New("plugin returned permanent ERROR")), nil, false
+			errors.New("plugin returned permanent ERROR")), nil, nil, false
 
 	default:
 		slog.Error("transform unknown status from plugin",
@@ -269,7 +297,7 @@ func (r *Runner) handleResponse(ctx context.Context, st transformStage, f *pb.Fr
 			"status", resp.GetStatus().String(),
 		)
 		return r.handlePermanentFailure(st, f,
-			errors.New("plugin returned unknown status")), nil, false
+			errors.New("plugin returned unknown status")), nil, nil, false
 	}
 }
 
@@ -340,6 +368,24 @@ func (r *Runner) publishAll(ctx context.Context, frames []*pb.Frame) error {
 		}
 	}
 	return nil
+}
+
+func (r *Runner) publishErrorEvents(ctx context.Context, st transformStage, orig *pb.Frame, events []*pb.Event) {
+	if st.errorSink == nil {
+		slog.Warn("transform plugin returned error_events but no error_sink configured",
+			"stage", st.name,
+			"count", len(events),
+		)
+		return
+	}
+	for _, frame := range toFrames(orig, events) {
+		if err := st.errorSink.Publish(ctx, frame); err != nil {
+			slog.Error("error_sink publish failed",
+				"stage", st.name,
+				"error", err,
+			)
+		}
+	}
 }
 
 func toRequest(f *pb.Frame) *pb.TransformRequest {

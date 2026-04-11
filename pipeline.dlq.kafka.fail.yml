@@ -1,0 +1,48 @@
+# Pipeline: Kafka → uppercase → Kafka sink (BAD TOPIC) + DLQ
+# Purpose: Force async produce errors → nack → DLQ path
+# The primary sink targets a non-existent topic (auto-create is off),
+# so Kafka rejects the produce → error → nack → DLQ → commit.
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.yml
+
+transformers:
+  - name: uppercase
+    type: grpc
+    address: "localhost:50052"
+    timeout_ms: 1000
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+
+sinks:
+  - kafka
+
+sink_configs:
+  kafka:
+    brokers: ["localhost:9094"]
+    topic: "quanta-nonexistent-topic"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-sink-bad"
+    timeout: 5s
+    retry_max: 1
+    retry_backoff_min: 100ms
+    retry_backoff_max: 500ms
+
+dlq:
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["localhost:9094"]
+    topic: "quanta-dlq"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-dlq-bad"
+    timeout: 10s
+    retry_max: 3
+    retry_backoff_min: 100ms
+    retry_backoff_max: 1s

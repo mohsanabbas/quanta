@@ -92,7 +92,7 @@ func (c *captureSink) Publish(_ context.Context, f *pb.Frame) error {
 	c.pushed = append(c.pushed, f)
 	c.mu.Unlock()
 	if c.ackFn != nil {
-		c.ackFn(f.Checkpoint)
+		c.ackFn(context.Background(), f.Checkpoint)
 	}
 	return nil
 }
@@ -225,10 +225,10 @@ func TestRunner_PushFrame(t *testing.T) {
 
 			r := newTestRunner()
 			fake := &fakeTransform{mode: tt.mode}
-			r.AddTransformer("t1", fake, 100*time.Millisecond, tt.retries, 1*time.Millisecond)
+			r.AddTransformer("t1", fake, 100*time.Millisecond, tt.retries, 1*time.Millisecond, nil)
 
 			if tt.mode == "fanout2" {
-				r.AddTransformer("t2", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0)
+				r.AddTransformer("t2", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0, nil)
 			}
 
 			cs := &captureSink{}
@@ -334,10 +334,10 @@ func TestCallTransform_ErrorClassification(t *testing.T) {
 			r := newTestRunner()
 			dl := &deadLetterCapture{}
 			r.coord.SetDeadLetter(dl.fn)
-			r.AddTransformer("test", cli, 50*time.Millisecond, tt.retries, 1*time.Millisecond)
+			r.AddTransformer("test", cli, 50*time.Millisecond, tt.retries, 1*time.Millisecond, nil)
 			r.AddSink(&captureSink{})
 
-			outcome, _ := r.callTransform(context.Background(),
+			outcome, _, _ := r.callTransform(context.Background(),
 				r.stages[0], makeFrame())
 
 			if outcome != tt.wantOutcome {
@@ -420,10 +420,10 @@ func TestCallTransform_StatusClassification(t *testing.T) {
 			r := newTestRunner()
 			dl := &deadLetterCapture{}
 			r.coord.SetDeadLetter(dl.fn)
-			r.AddTransformer("test", fake, 100*time.Millisecond, tt.retries, 1*time.Millisecond)
+			r.AddTransformer("test", fake, 100*time.Millisecond, tt.retries, 1*time.Millisecond, nil)
 			r.AddSink(&captureSink{})
 
-			outcome, _ := r.callTransform(context.Background(),
+			outcome, _, _ := r.callTransform(context.Background(),
 				r.stages[0], makeFrame())
 
 			if outcome != tt.wantOutcome {
@@ -453,11 +453,11 @@ func TestCallTransform_DeadLetterReceivesFrame(t *testing.T) {
 	r.coord.SetDeadLetter(dl.fn)
 
 	cli := &grpcErrTransform{code: codes.InvalidArgument}
-	r.AddTransformer("dl-stage", cli, 50*time.Millisecond, 0, 0)
+	r.AddTransformer("dl-stage", cli, 50*time.Millisecond, 0, 0, nil)
 	r.AddSink(&captureSink{})
 
 	frame := makeFrame()
-	outcome, _ := r.callTransform(context.Background(), r.stages[0], frame)
+	outcome, _, _ := r.callTransform(context.Background(), r.stages[0], frame)
 
 	if outcome != outcomeFailed {
 		t.Fatalf("outcome: got %d, want outcomeFailed", outcome)
@@ -518,11 +518,11 @@ func TestCallTransform_ContextCancelled_AbortsImmediately(t *testing.T) {
 
 			cli := &grpcErrTransform{code: codes.Unavailable}
 			r := newTestRunner()
-			r.AddTransformer("ctx-test", cli, 50*time.Millisecond, tt.retries, 50*time.Millisecond)
+			r.AddTransformer("ctx-test", cli, 50*time.Millisecond, tt.retries, 50*time.Millisecond, nil)
 			r.AddSink(&captureSink{})
 
 			start := time.Now()
-			outcome, _ := r.callTransform(ctx, r.stages[0], makeFrame())
+			outcome, _, _ := r.callTransform(ctx, r.stages[0], makeFrame())
 			elapsed := time.Since(start)
 
 			if outcome != outcomeAbort {
@@ -545,7 +545,7 @@ func TestPushFrame_SingleAckOnDrop(t *testing.T) {
 	t.Parallel()
 
 	r := newTestRunner()
-	r.AddTransformer("dropper", &fakeTransform{mode: "drop"}, 100*time.Millisecond, 0, 0)
+	r.AddTransformer("dropper", &fakeTransform{mode: "drop"}, 100*time.Millisecond, 0, 0, nil)
 	r.AddSink(&failSink{})
 
 	ac := &ackCounter{}
@@ -565,7 +565,7 @@ func TestPushFrame_SingleAckOnPermanentError(t *testing.T) {
 
 	r := newTestRunner()
 	r.coord.SetDeadLetter(func(string, *pb.Frame, error) {})
-	r.AddTransformer("broken", &fakeTransform{mode: "permanent_error"}, 100*time.Millisecond, 0, 0)
+	r.AddTransformer("broken", &fakeTransform{mode: "permanent_error"}, 100*time.Millisecond, 0, 0, nil)
 	r.AddSink(&failSink{})
 
 	ac := &ackCounter{}
@@ -584,7 +584,7 @@ func TestPushFrame_SingleAckOnOK(t *testing.T) {
 	t.Parallel()
 
 	r := newTestRunner()
-	r.AddTransformer("pass", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0)
+	r.AddTransformer("pass", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0, nil)
 	cs := &captureSink{}
 	r.AddSink(cs)
 
@@ -604,7 +604,7 @@ func TestPushFrame_FanOutSingleAck(t *testing.T) {
 	t.Parallel()
 
 	r := newTestRunner()
-	r.AddTransformer("fan", &fakeTransform{mode: "fanout2"}, 100*time.Millisecond, 0, 0)
+	r.AddTransformer("fan", &fakeTransform{mode: "fanout2"}, 100*time.Millisecond, 0, 0, nil)
 	cs := &captureSink{}
 	r.AddSink(cs)
 
@@ -726,9 +726,9 @@ func TestRunner_Close_ErrorAggregation(t *testing.T) {
 
 			r := newTestRunner()
 			if tt.transformErr != nil {
-				r.AddTransformer("broken", &failTransformClose{err: tt.transformErr}, 0, 0, 0)
+				r.AddTransformer("broken", &failTransformClose{err: tt.transformErr}, 0, 0, 0, nil)
 			} else {
-				r.AddTransformer("ok", &fakeTransform{mode: "ok"}, 0, 0, 0)
+				r.AddTransformer("ok", &fakeTransform{mode: "ok"}, 0, 0, 0, nil)
 			}
 			if tt.sinkErr != nil {
 				r.AddSink(&failSink{err: tt.sinkErr})
@@ -790,5 +790,278 @@ func TestRunner_BackoffOrCancel(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.wantResult)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — NackAware binding + DLQ wiring in Runner
+// ---------------------------------------------------------------------------
+
+// nackCaptureSink implements both AckAware and NackAware.
+type nackCaptureSink struct {
+	mu       sync.Mutex
+	pushed   []*pb.Frame
+	ackFn    sink.EmitFn
+	nackFn   sink.NackFn
+	publishErr error
+}
+
+func (s *nackCaptureSink) Configure(context.Context, any) error { return nil }
+func (s *nackCaptureSink) Publish(_ context.Context, f *pb.Frame) error {
+	s.mu.Lock()
+	s.pushed = append(s.pushed, f)
+	s.mu.Unlock()
+	if s.publishErr != nil {
+		return s.publishErr
+	}
+	if s.ackFn != nil {
+		s.ackFn(context.Background(), f.Checkpoint)
+	}
+	return nil
+}
+func (s *nackCaptureSink) Close(context.Context) error { return nil }
+func (s *nackCaptureSink) BindAck(fn sink.EmitFn)      { s.ackFn = fn }
+func (s *nackCaptureSink) BindNack(fn sink.NackFn)      { s.nackFn = fn }
+
+var (
+	_ sink.Adapter   = (*nackCaptureSink)(nil)
+	_ sink.AckAware  = (*nackCaptureSink)(nil)
+	_ sink.NackAware = (*nackCaptureSink)(nil)
+)
+
+func TestAddSink_BindsNackAware(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	ns := &nackCaptureSink{}
+	r.AddSink(ns)
+
+	if ns.nackFn == nil {
+		t.Fatal("NackAware sink must have nackFn bound after AddSink")
+	}
+}
+
+func TestRunner_SetDLQSink(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	dlq := &fakeDLQAdapter{}
+	r.SetDLQSink(dlq)
+
+	if !r.coord.HasDLQ() {
+		t.Fatal("DLQ must be configured on coordinator after SetDLQSink")
+	}
+}
+
+func TestRunner_CloseDLQSink(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	dlq := &fakeDLQAdapter{}
+	r.SetDLQSink(dlq)
+
+	if err := r.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !dlq.closed {
+		t.Fatal("DLQ sink must be closed by Runner.Close")
+	}
+}
+
+func TestPublishAll_SyncSinkFail_NacksWithDLQ(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	r.AddTransformer("pass", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0, nil)
+
+	// Sync sink that fails every publish.
+	errSink := &publishErrSink{err: errors.New("broker down")}
+	r.AddSink(errSink)
+
+	dlq := &fakeDLQAdapter{}
+	r.SetDLQSink(dlq)
+
+	ac := &ackCounter{}
+	r.coord.Subscribe(ac.handler)
+
+	err := r.pushFrame(context.Background(), makeFrame())
+	// With DLQ configured, sync publish failure should nack → DLQ → commit.
+	// pushFrame returns nil (frame handled via DLQ path).
+	if err != nil {
+		t.Fatalf("pushFrame with DLQ should not return error: %v", err)
+	}
+
+	if dlq.published == nil {
+		t.Fatal("DLQ sink must receive the failed frame")
+	}
+	if ac.get() != 1 {
+		t.Fatalf("commit count: got %d, want 1 (nack → DLQ → commit)", ac.get())
+	}
+}
+
+func TestPublishAll_SyncSinkFail_NoDLQ_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	r.AddTransformer("pass", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0, nil)
+
+	errSink := &publishErrSink{err: errors.New("broker down")}
+	r.AddSink(errSink)
+	// No DLQ configured
+
+	ac := &ackCounter{}
+	r.coord.Subscribe(ac.handler)
+
+	err := r.pushFrame(context.Background(), makeFrame())
+	// Without DLQ, sync publish failure returns error (current behavior).
+	if err == nil {
+		t.Fatal("pushFrame without DLQ should return error on sync sink failure")
+	}
+	if ac.get() != 0 {
+		t.Fatalf("commit count: got %d, want 0 (no DLQ, barrier aborted)", ac.get())
+	}
+}
+
+// publishErrSink is a sync sink (no AckAware) that fails Publish with a given error.
+type publishErrSink struct {
+	err error
+}
+
+func (s *publishErrSink) Configure(context.Context, any) error              { return nil }
+func (s *publishErrSink) Publish(_ context.Context, _ *pb.Frame) error      { return s.err }
+func (s *publishErrSink) Close(context.Context) error                       { return nil }
+
+// fakeDLQAdapter satisfies both DLQPublisher (for coordinator) and sink.Adapter
+// (for Runner lifecycle). Captures published frames for assertion.
+type fakeDLQAdapter struct {
+	published *pb.Frame
+	closed    bool
+}
+
+func (d *fakeDLQAdapter) Configure(context.Context, any) error { return nil }
+func (d *fakeDLQAdapter) Publish(_ context.Context, f *pb.Frame) error {
+	d.published = f
+	return nil
+}
+func (d *fakeDLQAdapter) Close(context.Context) error {
+	d.closed = true
+	return nil
+}
+
+// errorEventsTransform returns error_events in the response alongside normal events.
+type errorEventsTransform struct {
+	fakeTransform
+}
+
+func (e *errorEventsTransform) Transform(_ context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
+	return &pb.TransformResponse{
+		Status:      pb.Status_OK,
+		Events:      []*pb.Event{{Value: []byte("good")}},
+		ErrorEvents: []*pb.Event{{Value: []byte("bad"), Metadata: &pb.EventMetadata{Headers: map[string]string{"dlq-error": "rejected"}}}},
+	}, nil
+}
+
+func TestRunStage_ErrorEventsRoutedToErrorSink(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	errCapture := &captureSink{}
+	r.AddTransformer("ce-norm", &errorEventsTransform{}, 100*time.Millisecond, 0, 0, errCapture)
+
+	outSink := &captureSink{}
+	r.AddSink(outSink)
+
+	if err := r.pushFrame(context.Background(), makeFrame()); err != nil {
+		t.Fatalf("pushFrame: %v", err)
+	}
+
+	outSink.mu.Lock()
+	gotOut := len(outSink.pushed)
+	outSink.mu.Unlock()
+	if gotOut != 1 {
+		t.Fatalf("output frames: got %d, want 1", gotOut)
+	}
+	if string(outSink.pushed[0].Value) != "good" {
+		t.Fatalf("output value: got %q, want %q", string(outSink.pushed[0].Value), "good")
+	}
+
+	errCapture.mu.Lock()
+	gotErr := len(errCapture.pushed)
+	errCapture.mu.Unlock()
+	if gotErr != 1 {
+		t.Fatalf("error_events frames: got %d, want 1", gotErr)
+	}
+	if string(errCapture.pushed[0].Value) != "bad" {
+		t.Fatalf("error value: got %q, want %q", string(errCapture.pushed[0].Value), "bad")
+	}
+	if string(errCapture.pushed[0].Headers["dlq-error"]) != "rejected" {
+		t.Fatalf("error header: got %q, want %q", string(errCapture.pushed[0].Headers["dlq-error"]), "rejected")
+	}
+}
+
+func TestRunStage_ErrorEventsNoSink_WarnsAndDrops(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	// No error sink configured (nil)
+	r.AddTransformer("ce-norm", &errorEventsTransform{}, 100*time.Millisecond, 0, 0, nil)
+
+	outSink := &captureSink{}
+	r.AddSink(outSink)
+
+	// Should not panic or error — just warn and drop error_events
+	if err := r.pushFrame(context.Background(), makeFrame()); err != nil {
+		t.Fatalf("pushFrame: %v", err)
+	}
+
+	outSink.mu.Lock()
+	gotOut := len(outSink.pushed)
+	outSink.mu.Unlock()
+	if gotOut != 1 {
+		t.Fatalf("output frames: got %d, want 1 (normal events should still flow)", gotOut)
+	}
+}
+
+// errorEventsOnlyTransform returns only error_events, no normal events.
+type errorEventsOnlyTransform struct {
+	fakeTransform
+}
+
+func (e *errorEventsOnlyTransform) Transform(_ context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
+	return &pb.TransformResponse{
+		Status:      pb.Status_OK,
+		ErrorEvents: []*pb.Event{{Value: []byte("rejected-only")}},
+	}, nil
+}
+
+func TestRunStage_ErrorEventsOnly_NoOutputFrames(t *testing.T) {
+	t.Parallel()
+
+	r := newTestRunner()
+	errCapture := &captureSink{}
+	r.AddTransformer("ce-norm", &errorEventsOnlyTransform{}, 100*time.Millisecond, 0, 0, errCapture)
+
+	outSink := &captureSink{}
+	r.AddSink(outSink)
+
+	if err := r.pushFrame(context.Background(), makeFrame()); err != nil {
+		t.Fatalf("pushFrame: %v", err)
+	}
+
+	outSink.mu.Lock()
+	gotOut := len(outSink.pushed)
+	outSink.mu.Unlock()
+	if gotOut != 0 {
+		t.Fatalf("output frames: got %d, want 0 (all rejected)", gotOut)
+	}
+
+	errCapture.mu.Lock()
+	gotErr := len(errCapture.pushed)
+	errCapture.mu.Unlock()
+	if gotErr != 1 {
+		t.Fatalf("error_events frames: got %d, want 1", gotErr)
+	}
+	if string(errCapture.pushed[0].Value) != "rejected-only" {
+		t.Fatalf("error value: got %q, want %q", string(errCapture.pushed[0].Value), "rejected-only")
 	}
 }

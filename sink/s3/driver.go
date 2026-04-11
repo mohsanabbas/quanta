@@ -231,16 +231,16 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 		return
 	}
 
-	d.ackAll(checkpoints)
+	d.ackAll(ctx, checkpoints)
 	d.recycleBatch(b)
 }
 
-func (d *Driver) ackAll(checkpoints []*pb.CheckpointToken) {
+func (d *Driver) ackAll(ctx context.Context, checkpoints []*pb.CheckpointToken) {
 	if d.ack == nil {
 		return
 	}
 	for _, tok := range checkpoints {
-		d.ack(tok)
+		d.ack(ctx, tok)
 	}
 }
 

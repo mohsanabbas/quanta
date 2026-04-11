@@ -19,6 +19,7 @@ type PipelineConfig struct {
 	Transformers  []TransformerConfig `yaml:"transformers"`
 	Sinks         []string            `yaml:"sinks"`
 	SinkConfigs   map[string]RawYAML  `yaml:"sink_configs"`
+	DLQ           *DLQConfig          `yaml:"dlq,omitempty"`
 	Debug         DebugConfig         `yaml:"debug"`
 
 	fileDir string `yaml:"-"`
@@ -44,6 +45,13 @@ type TransformerConfig struct {
 	TimeoutMS   int               `yaml:"timeout_ms"`
 	ContentType string            `yaml:"content_type"`
 	Retry       RetryPolicyConfig `yaml:"retry_policy"`
+	ErrorSink   *ErrorSinkConfig  `yaml:"error_sink,omitempty"`
+}
+
+// ErrorSinkConfig configures a per-transformer error sink for plugin-rejected events.
+type ErrorSinkConfig struct {
+	Sink   string  `yaml:"sink"`
+	Config RawYAML `yaml:"config"`
 }
 
 type RetryPolicyConfig struct {
@@ -58,6 +66,15 @@ type DebugConfig struct {
 	AckFlushMS      int  `yaml:"ack_flush_ms"`
 	PrintValue      bool `yaml:"print_value"`
 	ValueMaxBytes   int  `yaml:"value_max_bytes"`
+}
+
+// DLQConfig configures the engine-managed dead-letter queue.
+type DLQConfig struct {
+	Enabled                bool    `yaml:"enabled"`
+	Sink                   string  `yaml:"sink"`
+	Config                 RawYAML `yaml:"config"`
+	IncludeOriginalHeaders bool    `yaml:"include_original_headers"`
+	IncludeErrorMetadata   bool    `yaml:"include_error_metadata"`
 }
 
 type RawYAML struct {
@@ -156,6 +173,14 @@ func (c PipelineConfig) validate() error {
 		default:
 			return qerr.Config("pipeline", "validate", errors.New("unsupported transformer type"))
 		}
+		if t.ErrorSink != nil && t.ErrorSink.Sink == "" {
+			return qerr.Config("pipeline", "validate", errors.New("error_sink.sink required for transformer "+t.Name))
+		}
 	}
+
+	if c.DLQ != nil && c.DLQ.Enabled && c.DLQ.Sink == "" {
+		return qerr.Config("pipeline", "validate", errors.New("dlq.sink required when dlq.enabled is true"))
+	}
+
 	return nil
 }

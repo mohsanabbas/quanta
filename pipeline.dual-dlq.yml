@@ -1,0 +1,62 @@
+# Pipeline: Kafka → cloudevents → Kafka sink + Engine DLQ
+#
+# Two error paths:
+#   1. Plugin error_events (cloudevents): invalid events → error_events field
+#      Routed by the engine to the transformer's error_sink (quanta-dlq).
+#   2. Engine DLQ (sink failure): broker/topic errors → coord.Nack → quanta-engine-dlq
+#      Routed by the engine DLQ sink.
+#
+# Run locally: bin/cloudevents on :50052, Kafka on localhost:9094
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.yml
+
+transformers:
+  - name: cloudevents
+    type: grpc
+    address: "localhost:50052"
+    timeout_ms: 2000
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+    error_sink:
+      sink: kafka
+      config:
+        brokers: ["localhost:9094"]
+        topic: "quanta-dlq"
+        acks: "all"
+        version: "3.6.0"
+        client_id: "quanta-error-sink"
+        timeout: 10s
+
+sinks:
+  - kafka
+
+sink_configs:
+  kafka:
+    brokers: ["localhost:9094"]
+    topic: "quanta-output"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-sink"
+    timeout: 10s
+    retry_max: 5
+    retry_backoff_min: 100ms
+    retry_backoff_max: 2s
+
+dlq:
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["localhost:9094"]
+    topic: "quanta-engine-dlq"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-engine-dlq"
+    timeout: 10s
+    retry_max: 3
+    retry_backoff_min: 100ms
+    retry_backoff_max: 1s

@@ -18,19 +18,21 @@ type SaramaSink struct {
 	cfg    Config
 	prod   sarama.AsyncProducer
 	ack    sink.EmitFn
+	nack   sink.NackFn
 	doneCh chan struct{}
 }
 
 var (
-	_ sink.Adapter  = (*SaramaSink)(nil)
-	_ sink.AckAware = (*SaramaSink)(nil)
+	_ sink.Adapter   = (*SaramaSink)(nil)
+	_ sink.AckAware  = (*SaramaSink)(nil)
+	_ sink.NackAware = (*SaramaSink)(nil)
 )
 
 type inflight struct {
-	checkpoint *pb.CheckpointToken
+	frame *pb.Frame
 }
 
-func (s *SaramaSink) Configure(_ context.Context, raw any) error {
+func (s *SaramaSink) Configure(ctx context.Context, raw any) error {
 	var cfg Config
 	switch v := raw.(type) {
 	case Config:
@@ -58,7 +60,7 @@ func (s *SaramaSink) Configure(_ context.Context, raw any) error {
 	}
 	s.prod = prod
 	s.doneCh = make(chan struct{})
-	go s.pump()
+	go s.ackLoop(context.WithoutCancel(ctx))
 	return nil
 }
 
@@ -128,6 +130,10 @@ func (s *SaramaSink) BindAck(fn sink.EmitFn) {
 	s.ack = fn
 }
 
+func (s *SaramaSink) BindNack(fn sink.NackFn) {
+	s.nack = fn
+}
+
 func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 	if s.prod == nil {
 		return qerr.Sink("kafka", "publish", errors.New("not configured"))
@@ -147,7 +153,7 @@ func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 		Value:     sarama.ByteEncoder(bytes.Clone(f.GetValue())),
 		Timestamp: tsOrNow(f),
 		Headers:   toRecordHeaders(f.GetHeaders()),
-		Metadata:  &inflight{checkpoint: f.Checkpoint},
+		Metadata:  &inflight{frame: f},
 	}
 
 	select {
@@ -167,64 +173,72 @@ func (s *SaramaSink) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *SaramaSink) pump() {
+func (s *SaramaSink) ackLoop(ctx context.Context) {
 	defer close(s.doneCh)
 	for {
 		select {
 		case pm, ok := <-s.prod.Successes():
 			if !ok {
-				s.flushErrors()
+				s.flushErrors(ctx)
 				return
 			}
-			s.ackFromMetadata(pm.Metadata)
+			s.ackFromMetadata(ctx, pm.Metadata)
 		case pe, ok := <-s.prod.Errors():
 			if !ok {
-				s.flushSuccesses()
+				s.flushSuccesses(ctx)
 				return
 			}
-			if pe != nil && pe.Msg != nil {
-				slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
-					"topic", pe.Msg.Topic,
-					"err", pe.Err,
-				)
-			}
+			s.nackFromMetadata(ctx, pe)
 		}
 	}
 }
 
-func (s *SaramaSink) ackFromMetadata(meta any) {
-	if inf, _ := meta.(*inflight); inf != nil && s.ack != nil {
-		s.ack(inf.checkpoint)
+func (s *SaramaSink) ackFromMetadata(ctx context.Context, meta any) {
+	if inf, _ := meta.(*inflight); inf != nil && inf.frame != nil && s.ack != nil {
+		s.ack(ctx, inf.frame.Checkpoint)
 	}
 }
 
-func (s *SaramaSink) flushErrors() {
+func (s *SaramaSink) nackFromMetadata(ctx context.Context, pe *sarama.ProducerError) {
+	if pe == nil || pe.Msg == nil {
+		return
+	}
+	inf, _ := pe.Msg.Metadata.(*inflight)
+	if inf == nil || inf.frame == nil {
+		return
+	}
+	if s.nack != nil {
+		s.nack(ctx, inf.frame, pe.Err)
+		return
+	}
+	slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
+		"topic", pe.Msg.Topic,
+		"err", pe.Err,
+	)
+}
+
+func (s *SaramaSink) flushErrors(ctx context.Context) {
 	for {
 		select {
 		case pe, ok := <-s.prod.Errors():
 			if !ok {
 				return
 			}
-			if pe != nil && pe.Msg != nil {
-				slog.Error("kafka-sink: produce failed, withholding ack for redelivery",
-					"topic", pe.Msg.Topic,
-					"err", pe.Err,
-				)
-			}
+			s.nackFromMetadata(ctx, pe)
 		default:
 			return
 		}
 	}
 }
 
-func (s *SaramaSink) flushSuccesses() {
+func (s *SaramaSink) flushSuccesses(ctx context.Context) {
 	for {
 		select {
 		case pm, ok := <-s.prod.Successes():
 			if !ok {
 				return
 			}
-			s.ackFromMetadata(pm.Metadata)
+			s.ackFromMetadata(ctx, pm.Metadata)
 		default:
 			return
 		}

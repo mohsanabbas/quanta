@@ -94,7 +94,7 @@ func (s *transformerServer) Metadata(context.Context, *pb.MetadataRequest) (*pb.
 		Name:            _pluginName,
 		Version:         "1.0.0",
 		ProtocolVersion: &pb.PluginVersion{Major: 1, Minor: 0, Patch: 0},
-		Capabilities:    map[string]string{"batch": "false", "spec": "cloudevents/1.0"},
+		Capabilities:    map[string]string{"batch": "false", "spec": "cloudevents/1.0", "error_events": "true"},
 	}, nil
 }
 
@@ -109,11 +109,11 @@ func (s *transformerServer) TransformStream(pb.TransformService_TransformStreamS
 func (s *transformerServer) Transform(_ context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
 	var in rawEvent
 	if err := json.Unmarshal(req.GetPayload(), &in); err != nil {
-		return s.toDLQ(req.GetPayload(), "unmarshal_error", err.Error()), nil
+		return s.toErrorEvent(req.GetPayload(), "unmarshal_error", err.Error()), nil
 	}
 
 	if in.Properties.Provider == "" || in.Context.Event == "" {
-		return s.toDLQ(req.GetPayload(), "validation_error", "missing required field: provider or event"), nil
+		return s.toErrorEvent(req.GetPayload(), "validation_error", "missing required field: provider or event"), nil
 	}
 
 	ceID := in.Context.EventContractID
@@ -121,7 +121,7 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 		ceID = in.Properties.RequestID
 	}
 	if ceID == "" {
-		return s.toDLQ(req.GetPayload(), "validation_error", "missing event id"), nil
+		return s.toErrorEvent(req.GetPayload(), "validation_error", "missing event id"), nil
 	}
 
 	occurredAt, err := time.Parse(time.RFC3339, in.Context.CreatedAt)
@@ -134,7 +134,7 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 
 	if statusClass == "error" || statusClass == "throttled" {
 		reason := fmt.Sprintf("unhealthy event: status=%s class=%s", in.Properties.Status, statusClass)
-		return s.toDLQ(req.GetPayload(), "status_rejected", reason), nil
+		return s.toErrorEvent(req.GetPayload(), "status_rejected", reason), nil
 	}
 
 	ce := cloudevents.New()
@@ -171,12 +171,12 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 	}
 
 	if err := ce.SetData("application/json", data); err != nil {
-		return s.toDLQ(req.GetPayload(), "marshal_error", err.Error()), nil
+		return s.toErrorEvent(req.GetPayload(), "marshal_error", err.Error()), nil
 	}
 
 	payload, err := json.Marshal(ce)
 	if err != nil {
-		return s.toDLQ(req.GetPayload(), "marshal_error", err.Error()), nil
+		return s.toErrorEvent(req.GetPayload(), "marshal_error", err.Error()), nil
 	}
 
 	headers := map[string]string{
@@ -189,7 +189,6 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 		"ce-aiprovider":  ce.Extensions()["aiprovider"].(string),
 		"ce-environment": ce.Extensions()["environment"].(string),
 		"ce-statusclass": ce.Extensions()["statusclass"].(string),
-		"__topic":        _outputTopic,
 	}
 
 	meta := &pb.EventMetadata{
@@ -206,7 +205,7 @@ func (s *transformerServer) Transform(_ context.Context, req *pb.TransformReques
 	}, nil
 }
 
-func (s *transformerServer) toDLQ(raw []byte, errClass, errMsg string) *pb.TransformResponse {
+func (s *transformerServer) toErrorEvent(raw []byte, errClass, errMsg string) *pb.TransformResponse {
 
 	var rawPayload json.RawMessage
 	if json.Valid(raw) {
@@ -233,7 +232,6 @@ func (s *transformerServer) toDLQ(raw []byte, errClass, errMsg string) *pb.Trans
 		"dlq-error":       errMsg,
 		"dlq-error-class": errClass,
 		"dlq-transformer": _pluginName,
-		"__topic":         _dlqTopic,
 	}
 
 	meta := &pb.EventMetadata{
@@ -242,8 +240,8 @@ func (s *transformerServer) toDLQ(raw []byte, errClass, errMsg string) *pb.Trans
 	}
 
 	return &pb.TransformResponse{
-		Status: pb.Status_OK,
-		Events: []*pb.Event{{Value: payload, Metadata: meta}},
+		Status:      pb.Status_OK,
+		ErrorEvents: []*pb.Event{{Value: payload, Metadata: meta}},
 	}
 }
 

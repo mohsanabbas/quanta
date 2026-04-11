@@ -32,6 +32,13 @@ message TransformResponse {
   Status status         = 2;
   string error_message  = 3;
   int32  retry_after_ms = 4;
+
+  // Plugin-rejected events routed to the stage's error sink.
+  // Plugins return business-invalid events here instead of mixing them
+  // into the normal events list.  The engine routes these to the
+  // error sink configured for the transformer stage.
+  // If no error sink is configured, these events are dropped with a warning.
+  repeated Event error_events = 5;
 }
 
 // An output event.

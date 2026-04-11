@@ -9,7 +9,8 @@ import (
 	pb "quanta/api/proto/v1"
 )
 
-type EmitFn func(*pb.CheckpointToken)
+// EmitFn is called when a sink successfully delivers a frame.
+type EmitFn func(ctx context.Context, tok *pb.CheckpointToken)
 
 type Adapter interface {
 	Configure(ctx context.Context, cfg any) error
@@ -19,6 +20,14 @@ type Adapter interface {
 
 type AckAware interface {
 	BindAck(EmitFn)
+}
+
+// NackFn is called when a sink permanently fails to deliver a frame.
+type NackFn func(ctx context.Context, frame *pb.Frame, err error)
+
+// NackAware sinks can signal per-message delivery failure.
+type NackAware interface {
+	BindNack(NackFn)
 }
 
 type Registration struct {

@@ -170,7 +170,7 @@ func TestDriverAckOnFlush(t *testing.T) {
 
 	var acked []*pb.CheckpointToken
 	var ackMu sync.Mutex
-	d.BindAck(func(tok *pb.CheckpointToken) {
+	d.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
 		ackMu.Lock()
 		acked = append(acked, tok)
 		ackMu.Unlock()
@@ -257,7 +257,7 @@ func TestDriverUploadError_WithholdsAck(t *testing.T) {
 	defer d.Close(context.Background())
 
 	var acked atomic.Int32
-	d.BindAck(func(_ *pb.CheckpointToken) { acked.Add(1) })
+	d.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
 
 	ctx := context.Background()
 	for i := range 3 {
