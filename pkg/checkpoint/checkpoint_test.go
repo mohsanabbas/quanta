@@ -6,10 +6,6 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// Uncapped
-// ---------------------------------------------------------------------------
-
 func TestUncapped_PendingEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -51,49 +47,62 @@ func TestUncapped_SingleTrackResolve(t *testing.T) {
 func TestUncapped_InOrderResolve(t *testing.T) {
 	t.Parallel()
 
-	u := NewUncapped[int]()
-	r1 := u.Track(10, 5)
-	r2 := u.Track(20, 5)
-	r3 := u.Track(30, 5)
-
-	h1 := r1()
-	if h1 == nil || *h1 != 10 {
-		t.Fatalf("after r1: got %v, want 10", h1)
+	tests := []struct {
+		name    string
+		payloads []int
+		sizes    []int64
+		wantSeq  []int
+	}{
+		{
+			name:     "three_in_order",
+			payloads: []int{10, 20, 30},
+			sizes:    []int64{5, 5, 5},
+			wantSeq:  []int{10, 20, 30},
+		},
+		{
+			name:     "single_element",
+			payloads: []int{42},
+			sizes:    []int64{8},
+			wantSeq:  []int{42},
+		},
 	}
 
-	h2 := r2()
-	if h2 == nil || *h2 != 20 {
-		t.Fatalf("after r2: got %v, want 20", h2)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	h3 := r3()
-	if h3 == nil || *h3 != 30 {
-		t.Fatalf("after r3: got %v, want 30", h3)
-	}
-
-	if p := u.Pending(); p != 0 {
-		t.Fatalf("Pending after all resolved: got %d, want 0", p)
+			u := NewUncapped[int]()
+			resolvers := make([]func() *int, len(tt.payloads))
+			for i, p := range tt.payloads {
+				resolvers[i] = u.Track(p, tt.sizes[i])
+			}
+			for i, r := range resolvers {
+				h := r()
+				if h == nil || *h != tt.wantSeq[i] {
+					t.Fatalf("resolve[%d]: got %v, want %d", i, h, tt.wantSeq[i])
+				}
+			}
+			if p := u.Pending(); p != 0 {
+				t.Fatalf("Pending after all resolved: got %d, want 0", p)
+			}
+		})
 	}
 }
 
 func TestUncapped_OutOfOrderResolveHeadLast(t *testing.T) {
 	t.Parallel()
 
-	// Resolve last → middle → head. The checkpoint only advances when the
-	// head resolves, at which point Highest reports the max payload seen.
 	u := NewUncapped[int]()
 	r1 := u.Track(1, 10)
 	r2 := u.Track(2, 10)
 	r3 := u.Track(3, 10)
 
-	// Resolve tail and middle first: checkpoint stays nil.
 	r3()
 	r2()
 	if h := u.Highest(); h != nil {
 		t.Fatalf("Highest before head resolved: got %v, want nil", h)
 	}
 
-	// Resolve head: checkpoint advances and reports the accumulated payload.
 	h := r1()
 	if h == nil || *h != 3 {
 		t.Fatalf("Highest after head resolved (out of order): got %v, want 3", h)
@@ -111,12 +120,10 @@ func TestUncapped_HeadResolveAdvancesOnly(t *testing.T) {
 	_ = u.Track(2, 5)
 	_ = u.Track(3, 5)
 
-	// Resolve head: checkpoint advances to payload=1.
 	h := r1()
 	if h == nil || *h != 1 {
 		t.Fatalf("after head resolve: got %v, want 1", h)
 	}
-	// Pending: remaining two nodes still tracked.
 	if p := u.Pending(); p != 10 {
 		t.Fatalf("Pending after head resolve: got %d, want 10", p)
 	}
@@ -125,40 +132,67 @@ func TestUncapped_HeadResolveAdvancesOnly(t *testing.T) {
 func TestUncapped_PendingSumsSizes(t *testing.T) {
 	t.Parallel()
 
-	u := NewUncapped[string]()
-	u.Track("a", 10)
-	u.Track("b", 20)
-	u.Track("c", 30)
+	tests := []struct {
+		name    string
+		sizes   []int64
+		wantSum int64
+	}{
+		{name: "three_equal", sizes: []int64{10, 20, 30}, wantSum: 60},
+		{name: "single", sizes: []int64{7}, wantSum: 7},
+		{name: "two_items", sizes: []int64{100, 200}, wantSum: 300},
+	}
 
-	if p := u.Pending(); p != 60 {
-		t.Fatalf("Pending: got %d, want 60", p)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			u := NewUncapped[string]()
+			for i, s := range tt.sizes {
+				u.Track("v", s)
+				_ = i
+			}
+			if p := u.Pending(); p != tt.wantSum {
+				t.Fatalf("Pending: got %d, want %d", p, tt.wantSum)
+			}
+		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Capped
-// ---------------------------------------------------------------------------
 
 func TestCapped_TrackWithinCapacityDoesNotBlock(t *testing.T) {
 	t.Parallel()
 
-	c := NewCapped[int](100)
+	tests := []struct {
+		name     string
+		cap      int64
+		batch    int64
+		trackN   int
+	}{
+		{name: "three_within_100", cap: 100, batch: 30, trackN: 3},
+		{name: "one_exactly_at_cap", cap: 50, batch: 50, trackN: 1},
+	}
 
-	for i := 0; i < 3; i++ {
-		done := make(chan error, 1)
-		go func(idx int) {
-			_, err := c.Track(context.Background(), idx, 30)
-			done <- err
-		}(i)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("Track[%d]: %v", i, err)
+			c := NewCapped[int](tt.cap)
+			for i := 0; i < tt.trackN; i++ {
+				done := make(chan error, 1)
+				go func(idx int) {
+					_, err := c.Track(context.Background(), idx, tt.batch)
+					done <- err
+				}(i)
+
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Errorf("Track[%d]: %v", i, err)
+					}
+				case <-time.After(200 * time.Millisecond):
+					t.Fatalf("Track[%d] blocked unexpectedly within capacity", i)
+				}
 			}
-		case <-time.After(200 * time.Millisecond):
-			t.Fatalf("Track[%d] blocked unexpectedly within capacity", i)
-		}
+		})
 	}
 }
 
@@ -172,23 +206,55 @@ func TestCapped_TrackBlocksWhenCapacityExceeded(t *testing.T) {
 		t.Fatalf("first Track: %v", err)
 	}
 
-	ready := make(chan struct{})
-	done := make(chan struct{})
+	type result struct {
+		resolve func() *int
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	started := make(chan struct{})
+
+	c.cond.L.Lock()
 	go func() {
-		close(ready)
-		c.Track(context.Background(), 2, 10) //nolint:errcheck
-		close(done)
+		close(started)
+		resolve, err := c.Track(context.Background(), 2, 10)
+		resultCh <- result{resolve: resolve, err: err}
 	}()
 
-	<-ready
-	// Give the goroutine time to enter cond.Wait().
-	time.Sleep(30 * time.Millisecond)
+	<-started
+	select {
+	case res := <-resultCh:
+		if res.resolve != nil {
+			res.resolve()
+		}
+		c.cond.L.Unlock()
+		t.Fatal("Track returned before waiting for capacity")
+	default:
+	}
+	c.cond.L.Unlock()
 
-	// Release the first track; the goroutine should unblock.
+	c.cond.L.Lock()
+	select {
+	case res := <-resultCh:
+		if res.resolve != nil {
+			res.resolve()
+		}
+		c.cond.L.Unlock()
+		t.Fatal("Track returned before release")
+	default:
+	}
+	c.cond.L.Unlock()
+
 	r1()
 
 	select {
-	case <-done:
+	case res := <-resultCh:
+		if res.err != nil {
+			t.Fatalf("blocked Track: %v", res.err)
+		}
+		if res.resolve == nil {
+			t.Fatal("blocked Track returned nil resolve")
+		}
+		res.resolve()
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("blocked Track did not unblock after release")
 	}
@@ -204,7 +270,6 @@ func TestCapped_TrackContextPreCancelled(t *testing.T) {
 		t.Fatalf("first Track: %v", err)
 	}
 
-	// Pre-cancel the context before attempting a second Track.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -240,10 +305,6 @@ func TestCapped_PendingAndHighest(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Manager
-// ---------------------------------------------------------------------------
-
 func TestManager_TrackAndResolve(t *testing.T) {
 	t.Parallel()
 
@@ -263,18 +324,37 @@ func TestManager_TrackAndResolve(t *testing.T) {
 func TestManager_ResolveReturnsHighest(t *testing.T) {
 	t.Parallel()
 
-	m := NewManager[int](100, time.Hour)
+	tests := []struct {
+		name     string
+		payloads []int
+		want     int
+	}{
+		{name: "three_sequential", payloads: []int{10, 20, 30}, want: 30},
+		{name: "single", payloads: []int{42}, want: 42},
+	}
 
-	r1, _ := m.Track(context.Background(), 10)
-	r2, _ := m.Track(context.Background(), 20)
-	r3, _ := m.Track(context.Background(), 30)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	r1()
-	r2()
-	highest, _ := r3()
-
-	if highest == nil || *highest != 30 {
-		t.Fatalf("Highest after all resolved: got %v, want 30", highest)
+			m := NewManager[int](100, time.Hour)
+			resolvers := make([]func() (*int, bool), len(tt.payloads))
+			for i, p := range tt.payloads {
+				r, err := m.Track(context.Background(), p)
+				if err != nil {
+					t.Fatalf("Track[%d]: %v", i, err)
+				}
+				resolvers[i] = r
+			}
+			var last *int
+			for _, r := range resolvers {
+				h, _ := r()
+				last = h
+			}
+			if last == nil || *last != tt.want {
+				t.Fatalf("Highest after all resolved: got %v, want %d", last, tt.want)
+			}
+		})
 	}
 }
 
@@ -283,16 +363,12 @@ func TestManager_ShouldCommitFalseWithinInterval(t *testing.T) {
 
 	m := NewManager[int](100, time.Hour)
 
-	// The first resolve always commits because lastCommitNS starts at zero
-	// (epoch), which is always older than commitEvery from now.
 	r1, _ := m.Track(context.Background(), 1)
 	_, firstCommit := r1()
 	if !firstCommit {
 		t.Fatal("first resolve must commit (lastCommitNS starts at epoch)")
 	}
 
-	// After the timer is reset, a second resolve within the 1-hour window
-	// must NOT trigger a commit.
 	r2, _ := m.Track(context.Background(), 2)
 	_, shouldCommit := r2()
 	if shouldCommit {
@@ -318,10 +394,8 @@ func TestManager_Reset(t *testing.T) {
 
 	m := NewManager[int](1, time.Hour)
 
-	// Fill the single slot.
 	_, _ = m.Track(context.Background(), 1)
 
-	// Reset with larger capacity so subsequent tracks don't block.
 	m.Reset(100)
 
 	done := make(chan error, 1)
@@ -350,7 +424,6 @@ func TestManager_ContextPreCancelledWhileBlocked(t *testing.T) {
 		t.Fatalf("first Track: %v", err)
 	}
 
-	// Pre-cancel context before attempting second Track against a full manager.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

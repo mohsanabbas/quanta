@@ -3,6 +3,7 @@ package stdout
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -19,20 +20,30 @@ func makeFrame(token *pb.CheckpointToken) *pb.Frame {
 	return &pb.Frame{Value: []byte("data"), Checkpoint: token}
 }
 
-// ---------------------------------------------------------------------------
-// Configure
-// ---------------------------------------------------------------------------
-
 func TestDriver_Configure_ValidConfig(t *testing.T) {
 	t.Parallel()
 
-	d := &driver{}
-	err := d.Configure(context.Background(), Config{BatchSize: 4, PrintCounter: true})
-	if err != nil {
-		t.Fatalf("Configure: unexpected error: %v", err)
+	tests := []struct {
+		name          string
+		cfg           Config
+		wantBatchSize int
+	}{
+		{name: "value_config", cfg: Config{BatchSize: 4, PrintCounter: true}, wantBatchSize: 4},
+		{name: "pointer_config_via_value", cfg: Config{BatchSize: 2}, wantBatchSize: 2},
 	}
-	if d.cfg.BatchSize != 4 {
-		t.Fatalf("BatchSize: got %d, want 4", d.cfg.BatchSize)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := &driver{}
+			if err := d.Configure(context.Background(), tt.cfg); err != nil {
+				t.Fatalf("Configure: %v", err)
+			}
+			if d.cfg.BatchSize != tt.wantBatchSize {
+				t.Fatalf("BatchSize: got %d, want %d", d.cfg.BatchSize, tt.wantBatchSize)
+			}
+		})
 	}
 }
 
@@ -40,9 +51,8 @@ func TestDriver_Configure_ValidPointerConfig(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	err := d.Configure(context.Background(), &Config{BatchSize: 2})
-	if err != nil {
-		t.Fatalf("Configure with *Config: unexpected error: %v", err)
+	if err := d.Configure(context.Background(), &Config{BatchSize: 2}); err != nil {
+		t.Fatalf("Configure with *Config: %v", err)
 	}
 	if d.cfg.BatchSize != 2 {
 		t.Fatalf("BatchSize: got %d, want 2", d.cfg.BatchSize)
@@ -53,8 +63,7 @@ func TestDriver_Configure_InvalidType(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	err := d.Configure(context.Background(), "not-a-config")
-	if err == nil {
+	if err := d.Configure(context.Background(), "not-a-config"); err == nil {
 		t.Fatal("Configure with wrong type must return error")
 	}
 }
@@ -63,15 +72,13 @@ func TestDriver_Configure_DefaultValueMaxBytes(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	_ = d.Configure(context.Background(), Config{ValueMaxBytes: 0})
+	if err := d.Configure(context.Background(), Config{ValueMaxBytes: 0}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
 	if d.cfg.ValueMaxBytes != 120 {
 		t.Fatalf("ValueMaxBytes default: got %d, want 120", d.cfg.ValueMaxBytes)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Publish + BindAck
-// ---------------------------------------------------------------------------
 
 func TestDriver_Publish_BatchFlush(t *testing.T) {
 	t.Parallel()
@@ -82,24 +89,9 @@ func TestDriver_Publish_BatchFlush(t *testing.T) {
 		publish   int
 		wantAcks  int
 	}{
-		{
-			name:      "batch_of_3_flushes_on_third",
-			batchSize: 3,
-			publish:   3,
-			wantAcks:  3,
-		},
-		{
-			name:      "batch_not_reached_no_flush",
-			batchSize: 5,
-			publish:   3,
-			wantAcks:  0,
-		},
-		{
-			name:      "batch_0_disabled_no_auto_flush",
-			batchSize: 0,
-			publish:   4,
-			wantAcks:  0,
-		},
+		{name: "batch_of_3_flushes_on_third", batchSize: 3, publish: 3, wantAcks: 3},
+		{name: "batch_not_reached_no_flush", batchSize: 5, publish: 3, wantAcks: 0},
+		{name: "batch_0_disabled_no_auto_flush", batchSize: 0, publish: 4, wantAcks: 0},
 	}
 
 	for _, tt := range tests {
@@ -107,7 +99,9 @@ func TestDriver_Publish_BatchFlush(t *testing.T) {
 			t.Parallel()
 
 			d := &driver{}
-			_ = d.Configure(context.Background(), Config{BatchSize: tt.batchSize})
+			if err := d.Configure(context.Background(), Config{BatchSize: tt.batchSize}); err != nil {
+				t.Fatalf("Configure: %v", err)
+			}
 
 			var mu sync.Mutex
 			var acked int
@@ -138,7 +132,9 @@ func TestDriver_Close_FlushesPending(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	_ = d.Configure(context.Background(), Config{BatchSize: 10})
+	if err := d.Configure(context.Background(), Config{BatchSize: 10}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
 
 	var mu sync.Mutex
 	var acked int
@@ -149,7 +145,9 @@ func TestDriver_Close_FlushesPending(t *testing.T) {
 	})
 
 	for i := 0; i < 3; i++ {
-		_ = d.Publish(context.Background(), makeFrame(makeToken("t")))
+		if err := d.Publish(context.Background(), makeFrame(makeToken("t"))); err != nil {
+			t.Fatalf("Publish[%d]: %v", i, err)
+		}
 	}
 
 	if err := d.Close(context.Background()); err != nil {
@@ -169,9 +167,13 @@ func TestDriver_Close_NoAckFn_NoError(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	_ = d.Configure(context.Background(), Config{BatchSize: 10})
+	if err := d.Configure(context.Background(), Config{BatchSize: 10}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
 
-	_ = d.Publish(context.Background(), makeFrame(makeToken("t")))
+	if err := d.Publish(context.Background(), makeFrame(makeToken("t"))); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
 
 	if err := d.Close(context.Background()); err != nil {
 		t.Fatalf("Close without ackFn: %v", err)
@@ -182,7 +184,9 @@ func TestDriver_Publish_ContextCancelled_ReturnsError(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	_ = d.Configure(context.Background(), Config{DelayMS: 100})
+	if err := d.Configure(context.Background(), Config{DelayMS: 100}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -206,29 +210,39 @@ func TestDriver_Publish_MultipleFrames_AckedInOrder(t *testing.T) {
 
 	const n = 5
 	d := &driver{}
-	_ = d.Configure(context.Background(), Config{BatchSize: n})
+	if err := d.Configure(context.Background(), Config{BatchSize: n}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
 
 	var mu sync.Mutex
-	var tokens []*pb.CheckpointToken
+	var ackedTokens []*pb.CheckpointToken
 	d.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
 		mu.Lock()
-		tokens = append(tokens, tok)
+		ackedTokens = append(ackedTokens, tok)
 		mu.Unlock()
 	})
 
-	expected := make([]*pb.CheckpointToken, n)
+	sent := make([]*pb.CheckpointToken, n)
 	for i := 0; i < n; i++ {
-		tok := makeToken("t")
-		expected[i] = tok
-		_ = d.Publish(context.Background(), makeFrame(tok))
+		tok := makeToken(fmt.Sprintf("id-%d", i))
+		sent[i] = tok
+		if err := d.Publish(context.Background(), makeFrame(tok)); err != nil {
+			t.Fatalf("Publish[%d]: %v", i, err)
+		}
 	}
 
 	mu.Lock()
-	got := len(tokens)
+	gotN := len(ackedTokens)
 	mu.Unlock()
 
-	if got != n {
-		t.Fatalf("acked tokens: got %d, want %d", got, n)
+	if gotN != n {
+		t.Fatalf("acked count: got %d, want %d", gotN, n)
+	}
+
+	for i := 0; i < n; i++ {
+		if ackedTokens[i] != sent[i] {
+			t.Fatalf("acked[%d]: got different pointer, ack order not preserved", i)
+		}
 	}
 }
 
@@ -236,7 +250,9 @@ func TestDriver_Publish_DelayRespected(t *testing.T) {
 	t.Parallel()
 
 	d := &driver{}
-	_ = d.Configure(context.Background(), Config{DelayMS: 20})
+	if err := d.Configure(context.Background(), Config{DelayMS: 20}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
 	d.BindAck(func(context.Context, *pb.CheckpointToken) {})
 
 	start := time.Now()

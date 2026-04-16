@@ -8,8 +8,6 @@ import (
 	pb "quanta/api/proto/v1"
 )
 
-// cleanRegistry saves the current global registry and restores it after the
-// test. Must not be called from parallel tests since it mutates global state.
 func cleanRegistry(t *testing.T) {
 	t.Helper()
 	saved := _registry
