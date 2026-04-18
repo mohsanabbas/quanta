@@ -165,17 +165,17 @@ func TestDriverPublishAndFlush(t *testing.T) {
 func TestDriverAckOnFlush(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	spy := &spyClient{}
-	d := newTestDriver(t, spy)
-	defer d.Close(context.Background())
-
 	var acked []*pb.CheckpointToken
 	var ackMu sync.Mutex
-	d.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
-		ackMu.Lock()
-		acked = append(acked, tok)
-		ackMu.Unlock()
+	spy := &spyClient{}
+	d := newTestDriverWithOpts(t, spy, sink.BuildOptions{
+		Ack: func(_ context.Context, tok *pb.CheckpointToken) {
+			ackMu.Lock()
+			acked = append(acked, tok)
+			ackMu.Unlock()
+		},
 	})
+	defer d.Close(context.Background())
 
 	ctx := context.Background()
 	toks := make([]*pb.CheckpointToken, 3)
@@ -246,20 +246,21 @@ func TestDriverClonesSafely(t *testing.T) {
 }
 
 func TestDriverImplementsInterfaces(t *testing.T) {
-	var _ sink.Adapter = (*Driver)(nil)
-	var _ sink.AckAware = (*Driver)(nil)
-	var _ sink.NackAware = (*Driver)(nil)
+	var _ sink.Adapter = (*s3Driver)(nil)
+	caps := (&s3Driver{}).Caps()
+	assert.True(t, caps.AckAware, "s3 sink must be ack-aware")
+	assert.True(t, caps.NackAware, "s3 sink must be nack-aware")
 }
 
 func TestDriverUploadError_WithholdsAck(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	spy := &spyClient{err: errors.New("S3 unavailable")}
-	d := newTestDriver(t, spy)
-	defer d.Close(context.Background())
-
 	var acked atomic.Int32
-	d.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
+	spy := &spyClient{err: errors.New("S3 unavailable")}
+	d := newTestDriverWithOpts(t, spy, sink.BuildOptions{
+		Ack: func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) },
+	})
+	defer d.Close(context.Background())
 
 	ctx := context.Background()
 	for i := range 3 {
@@ -330,19 +331,18 @@ func TestDriverNack(t *testing.T) {
 				enc = &failEncoder{}
 			}
 
-			d := newTestDriverWithEncoder(t, spy, enc)
-			defer d.Close(context.Background())
-
 			var acked atomic.Int32
-			d.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
-
 			var nackMu sync.Mutex
 			var nacks []nackRecord
-			d.BindNack(func(_ context.Context, f *pb.Frame, err error) {
-				nackMu.Lock()
-				nacks = append(nacks, nackRecord{frame: f, err: err})
-				nackMu.Unlock()
+			d := newTestDriverWithEncoder(t, spy, enc, sink.BuildOptions{
+				Ack: func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) },
+				Nack: func(_ context.Context, f *pb.Frame, err error) {
+					nackMu.Lock()
+					nacks = append(nacks, nackRecord{frame: f, err: err})
+					nackMu.Unlock()
+				},
 			})
+			defer d.Close(context.Background())
 
 			ctx := context.Background()
 			frames := make([]*pb.Frame, 3)
@@ -392,7 +392,11 @@ func (f *failEncoder) Encode(_ [][]byte) ([]byte, error) {
 
 func (f *failEncoder) ContentType() string { return "application/octet-stream" }
 
-func newTestDriver(t *testing.T, spy *spyClient) *Driver {
+func newTestDriver(t *testing.T, spy *spyClient) *s3Driver {
+	return newTestDriverWithOpts(t, spy, sink.BuildOptions{})
+}
+
+func newTestDriverWithOpts(t *testing.T, spy *spyClient, opts sink.BuildOptions) *s3Driver {
 	t.Helper()
 	cfg := validCfg()
 	require.NoError(t, cfg.validate())
@@ -400,26 +404,10 @@ func newTestDriver(t *testing.T, spy *spyClient) *Driver {
 	enc, err := newEncoder(cfg.Format)
 	require.NoError(t, err)
 
-	pool := newBatchPool(cfg.BatchSize)
-
-	flushCtx, cancel := context.WithCancel(context.Background())
-
-	d := &Driver{
-		cfg:     cfg,
-		client:  spy,
-		encoder: enc,
-		pool:    pool,
-		current: pool.Get().(*batch),
-		sealCh:  make(chan *batch, 1),
-		stopCh:  make(chan struct{}),
-		doneCh:  make(chan struct{}),
-		cancel:  cancel,
-	}
-	go d.flushLoop(flushCtx)
-	return d
+	return newDriverWithClient(context.Background(), cfg, spy, enc, opts)
 }
 
-func newTestDriverWithEncoder(t *testing.T, spy *spyClient, enc Encoder) *Driver {
+func newTestDriverWithEncoder(t *testing.T, spy *spyClient, enc Encoder, opts sink.BuildOptions) *s3Driver {
 	t.Helper()
 	cfg := validCfg()
 	require.NoError(t, cfg.validate())
@@ -430,21 +418,5 @@ func newTestDriverWithEncoder(t *testing.T, spy *spyClient, enc Encoder) *Driver
 		require.NoError(t, err)
 	}
 
-	pool := newBatchPool(cfg.BatchSize)
-
-	flushCtx, cancel := context.WithCancel(context.Background())
-
-	d := &Driver{
-		cfg:     cfg,
-		client:  spy,
-		encoder: enc,
-		pool:    pool,
-		current: pool.Get().(*batch),
-		sealCh:  make(chan *batch, 1),
-		stopCh:  make(chan struct{}),
-		doneCh:  make(chan struct{}),
-		cancel:  cancel,
-	}
-	go d.flushLoop(flushCtx)
-	return d
+	return newDriverWithClient(context.Background(), cfg, spy, enc, opts)
 }

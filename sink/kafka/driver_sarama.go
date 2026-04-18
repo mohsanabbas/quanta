@@ -1,3 +1,10 @@
+// Package kafka — Sarama-backed Kafka sink driver.
+//
+// The driver is constructed via the package init() registration and reached
+// by the runner through sink.Build("kafka", cfg, opts). Construction acquires
+// the AsyncProducer and starts the ack-loop goroutine; on any failure the
+// constructor releases what it acquired and returns an error. There is no
+// valid "constructed but not configured" state.
 package kafka
 
 import (
@@ -14,7 +21,7 @@ import (
 	"github.com/IBM/sarama"
 )
 
-type SaramaSink struct {
+type saramaSink struct {
 	cfg    Config
 	prod   sarama.AsyncProducer
 	ack    sink.EmitFn
@@ -22,46 +29,49 @@ type SaramaSink struct {
 	doneCh chan struct{}
 }
 
-var (
-	_ sink.Adapter   = (*SaramaSink)(nil)
-	_ sink.AckAware  = (*SaramaSink)(nil)
-	_ sink.NackAware = (*SaramaSink)(nil)
-)
+var _ sink.Adapter = (*saramaSink)(nil)
 
 type inflight struct {
 	frame *pb.Frame
 }
 
-func (s *SaramaSink) Configure(ctx context.Context, raw any) error {
-	var cfg Config
-	switch v := raw.(type) {
-	case Config:
-		cfg = v
-	case *Config:
-		if v != nil {
-			cfg = *v
-		}
-	default:
-		return qerr.Sink("kafka", "configure", errors.New("invalid config type"))
-	}
-	if err := cfg.validateAndDefault(); err != nil {
-		return err
-	}
-	s.cfg = cfg
+func (s *saramaSink) Name() string { return "kafka" }
 
+func (s *saramaSink) Caps() sink.Capabilities {
+	return sink.Capabilities{AckAware: true, NackAware: true}
+}
+
+// newSaramaSink is the production factory: validates the config, builds the
+// Sarama AsyncProducer, and starts the ack-loop goroutine. Any failure after
+// producer creation closes the producer before returning.
+func newSaramaSink(ctx context.Context, cfg Config, opts sink.BuildOptions) (sink.Adapter, error) {
+	if err := cfg.validateAndDefault(); err != nil {
+		return nil, err
+	}
 	sc, err := buildSaramaConfig(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	prod, err := sarama.NewAsyncProducer(cfg.Brokers, sc)
 	if err != nil {
-		return qerr.Sink("kafka", "connect", err)
+		return nil, qerr.Sink("kafka", "connect", err)
 	}
-	s.prod = prod
-	s.doneCh = make(chan struct{})
+	return newSaramaSinkWithProducer(ctx, cfg, prod, opts), nil
+}
+
+// newSaramaSinkWithProducer wires an already-constructed producer into the
+// sink and starts the ack-loop. Used by tests with a fake producer; production
+// callers should use newSaramaSink.
+func newSaramaSinkWithProducer(ctx context.Context, cfg Config, prod sarama.AsyncProducer, opts sink.BuildOptions) *saramaSink {
+	s := &saramaSink{
+		cfg:    cfg,
+		prod:   prod,
+		ack:    opts.Ack,
+		nack:   opts.Nack,
+		doneCh: make(chan struct{}),
+	}
 	go s.ackLoop(context.WithoutCancel(ctx))
-	return nil
+	return s
 }
 
 func buildSaramaConfig(cfg Config) (*sarama.Config, error) {
@@ -78,11 +88,11 @@ func buildSaramaConfig(cfg Config) (*sarama.Config, error) {
 	sc.Producer.Return.Errors = true
 
 	switch cfg.Acks {
-	case _acksNone:
+	case AcksNone:
 		sc.Producer.RequiredAcks = sarama.NoResponse
-	case _acksLocal:
+	case AcksLocal:
 		sc.Producer.RequiredAcks = sarama.WaitForLocal
-	case _acksAll:
+	case AcksAll:
 		sc.Producer.RequiredAcks = sarama.WaitForAll
 	}
 
@@ -102,15 +112,15 @@ func buildSaramaConfig(cfg Config) (*sarama.Config, error) {
 	sc.Producer.Timeout = cfg.Timeout
 
 	switch cfg.Compression {
-	case "none":
+	case CompressionNone:
 		sc.Producer.Compression = sarama.CompressionNone
-	case "gzip":
+	case CompressionGZIP:
 		sc.Producer.Compression = sarama.CompressionGZIP
-	case "snappy":
+	case CompressionSnappy:
 		sc.Producer.Compression = sarama.CompressionSnappy
-	case "lz4":
+	case CompressionLZ4:
 		sc.Producer.Compression = sarama.CompressionLZ4
-	case "zstd":
+	case CompressionZSTD:
 		sc.Producer.Compression = sarama.CompressionZSTD
 	}
 
@@ -126,18 +136,7 @@ func buildSaramaConfig(cfg Config) (*sarama.Config, error) {
 	return sc, nil
 }
 
-func (s *SaramaSink) BindAck(fn sink.EmitFn) {
-	s.ack = fn
-}
-
-func (s *SaramaSink) BindNack(fn sink.NackFn) {
-	s.nack = fn
-}
-
-func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
-	if s.prod == nil {
-		return qerr.Sink("kafka", "publish", errors.New("not configured"))
-	}
+func (s *saramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 	topic := s.cfg.Topic
 	if s.cfg.HeaderTopicKey != "" && f.Headers != nil {
 		if v, ok := f.Headers[s.cfg.HeaderTopicKey]; ok && len(v) > 0 {
@@ -164,7 +163,7 @@ func (s *SaramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 	}
 }
 
-func (s *SaramaSink) Close(_ context.Context) error {
+func (s *saramaSink) Close(_ context.Context) error {
 	if s.prod != nil {
 		s.prod.AsyncClose()
 		<-s.doneCh
@@ -173,7 +172,7 @@ func (s *SaramaSink) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *SaramaSink) ackLoop(ctx context.Context) {
+func (s *saramaSink) ackLoop(ctx context.Context) {
 	defer close(s.doneCh)
 	for {
 		select {
@@ -193,13 +192,13 @@ func (s *SaramaSink) ackLoop(ctx context.Context) {
 	}
 }
 
-func (s *SaramaSink) ackFromMetadata(ctx context.Context, meta any) {
+func (s *saramaSink) ackFromMetadata(ctx context.Context, meta any) {
 	if inf, _ := meta.(*inflight); inf != nil && inf.frame != nil && s.ack != nil {
 		s.ack(ctx, inf.frame.Checkpoint)
 	}
 }
 
-func (s *SaramaSink) nackFromMetadata(ctx context.Context, pe *sarama.ProducerError) {
+func (s *saramaSink) nackFromMetadata(ctx context.Context, pe *sarama.ProducerError) {
 	if pe == nil || pe.Msg == nil {
 		return
 	}
@@ -217,7 +216,7 @@ func (s *SaramaSink) nackFromMetadata(ctx context.Context, pe *sarama.ProducerEr
 	)
 }
 
-func (s *SaramaSink) flushErrors(ctx context.Context) {
+func (s *saramaSink) flushErrors(ctx context.Context) {
 	for {
 		select {
 		case pe, ok := <-s.prod.Errors():
@@ -231,7 +230,7 @@ func (s *SaramaSink) flushErrors(ctx context.Context) {
 	}
 }
 
-func (s *SaramaSink) flushSuccesses(ctx context.Context) {
+func (s *saramaSink) flushSuccesses(ctx context.Context) {
 	for {
 		select {
 		case pm, ok := <-s.prod.Successes():

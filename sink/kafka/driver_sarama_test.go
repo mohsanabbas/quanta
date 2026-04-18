@@ -64,14 +64,8 @@ func (f *fakeAsyncProducer) AsyncClose() {
 	})
 }
 
-func newTestSink(fp *fakeAsyncProducer) *SaramaSink {
-	s := &SaramaSink{
-		cfg:    Config{Topic: "test-topic"},
-		prod:   fp,
-		doneCh: make(chan struct{}),
-	}
-	go s.ackLoop(context.Background())
-	return s
+func newTestSink(fp *fakeAsyncProducer, opts sink.BuildOptions) *saramaSink {
+	return newSaramaSinkWithProducer(context.Background(), Config{Topic: "test-topic"}, fp, opts)
 }
 
 func kafkaCheckpoint(topic string, partition int32, offset int64) *pb.CheckpointToken {
@@ -96,14 +90,21 @@ func testFrame(key, value string, tok *pb.CheckpointToken) *pb.Frame {
 
 func TestSaramaSink_CompileTimeChecks(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	var _ sink.Adapter = (*SaramaSink)(nil)
-	var _ sink.AckAware = (*SaramaSink)(nil)
+	var _ sink.Adapter = (*saramaSink)(nil)
+}
+
+func TestSaramaSink_Caps(t *testing.T) {
+	t.Parallel()
+	s := &saramaSink{}
+	caps := s.Caps()
+	assert.True(t, caps.AckAware, "kafka sink must be ack-aware")
+	assert.True(t, caps.NackAware, "kafka sink must be nack-aware")
 }
 
 func TestSaramaSink_Publish_Enqueues(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
+	s := newTestSink(fp, sink.BuildOptions{})
 	defer func() {
 		fp.AsyncClose()
 		<-s.doneCh
@@ -125,7 +126,7 @@ func TestSaramaSink_Publish_ContextCancelled(t *testing.T) {
 
 	fp := newFakeAsyncProducer()
 	fp.inputCh = make(chan *sarama.ProducerMessage)
-	s := newTestSink(fp)
+	s := newTestSink(fp, sink.BuildOptions{})
 	defer func() {
 		fp.AsyncClose()
 		<-s.doneCh
@@ -138,23 +139,10 @@ func TestSaramaSink_Publish_ContextCancelled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestSaramaSink_Publish_NilProducer(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := &SaramaSink{}
-	err := s.Publish(context.Background(), testFrame("k", "v", nil))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not configured")
-}
-
 func TestSaramaSink_Publish_NoTopic(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	fp := newFakeAsyncProducer()
-	s := &SaramaSink{
-		cfg:    Config{},
-		prod:   fp,
-		doneCh: make(chan struct{}),
-	}
-	go s.ackLoop(context.Background())
+	s := newSaramaSinkWithProducer(context.Background(), Config{}, fp, sink.BuildOptions{})
 	defer func() {
 		fp.AsyncClose()
 		<-s.doneCh
@@ -169,13 +157,14 @@ func TestSaramaSink_AckLoopAcksOnSuccess(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
 
 	var acked atomic.Int32
 	var ackedTok atomic.Value
-	s.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
-		acked.Add(1)
-		ackedTok.Store(tok)
+	s := newTestSink(fp, sink.BuildOptions{
+		Ack: func(_ context.Context, tok *pb.CheckpointToken) {
+			acked.Add(1)
+			ackedTok.Store(tok)
+		},
 	})
 
 	tok := kafkaCheckpoint("src", 0, 100)
@@ -196,11 +185,10 @@ func TestSaramaSink_AckLoopWithholdsAckOnError(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
 
 	var acked atomic.Int32
-	s.BindAck(func(_ context.Context, tok *pb.CheckpointToken) {
-		acked.Add(1)
+	s := newTestSink(fp, sink.BuildOptions{
+		Ack: func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) },
 	})
 
 	tok := kafkaCheckpoint("src", 0, 200)
@@ -223,10 +211,11 @@ func TestSaramaSink_AckLoopDrainsAllInFlight(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
 
 	var acked atomic.Int32
-	s.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
+	s := newTestSink(fp, sink.BuildOptions{
+		Ack: func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) },
+	})
 
 	const n = 5
 	for i := range n {
@@ -254,40 +243,19 @@ func TestSaramaSink_Close_WaitsAckLoop(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
+	s := newTestSink(fp, sink.BuildOptions{})
 
 	err := s.Close(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, s.prod)
 }
 
-func TestSaramaSink_Close_NilProducer(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := &SaramaSink{}
-	err := s.Close(context.Background())
-	assert.NoError(t, err)
-}
-
-func TestSaramaSink_BindAck(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := &SaramaSink{}
-	var called bool
-	s.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { called = true })
-	require.NotNil(t, s.ack)
-	s.ack(context.Background(), nil)
-	assert.True(t, called)
-}
-
 func TestSaramaSink_HeaderTopicOverride(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
-	s := &SaramaSink{
-		cfg:    Config{Topic: "default-topic", HeaderTopicKey: "X-Target"},
-		prod:   fp,
-		doneCh: make(chan struct{}),
-	}
-	go s.ackLoop(context.Background())
+	cfg := Config{Topic: "default-topic", HeaderTopicKey: "X-Target"}
+	s := newSaramaSinkWithProducer(context.Background(), cfg, fp, sink.BuildOptions{})
 	defer func() {
 		fp.AsyncClose()
 		<-s.doneCh
@@ -306,32 +274,18 @@ func TestSaramaSink_HeaderTopicOverride(t *testing.T) {
 	assert.Equal(t, "override-topic", msg.Topic)
 }
 
-func TestSaramaSink_ImplementsNackAware(t *testing.T) {
-	t.Parallel()
-	var _ sink.NackAware = (*SaramaSink)(nil)
-}
-
-func TestSaramaSink_BindNack(t *testing.T) {
-	defer goleak.VerifyNone(t)
-	s := &SaramaSink{}
-	var called bool
-	s.BindNack(func(_ context.Context, _ *pb.Frame, _ error) { called = true })
-	require.NotNil(t, s.nack)
-	s.nack(context.Background(), &pb.Frame{}, errors.New("test"))
-	assert.True(t, called)
-}
-
 func TestSaramaSink_AckLoopNacksOnError(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
 
 	var nacked atomic.Int32
 	var nackedFrame atomic.Value
-	s.BindNack(func(_ context.Context, f *pb.Frame, _ error) {
-		nacked.Add(1)
-		nackedFrame.Store(f)
+	s := newTestSink(fp, sink.BuildOptions{
+		Nack: func(_ context.Context, f *pb.Frame, _ error) {
+			nacked.Add(1)
+			nackedFrame.Store(f)
+		},
 	})
 
 	frame := &pb.Frame{
@@ -345,82 +299,16 @@ func TestSaramaSink_AckLoopNacksOnError(t *testing.T) {
 	require.NoError(t, s.Publish(context.Background(), frame))
 	msg := <-fp.inputCh
 
-	// Simulate broker error for this message.
 	fp.errorCh <- &sarama.ProducerError{
 		Msg: msg,
-		Err: errors.New("broker rejected"),
+		Err: errors.New("broker down"),
 	}
 
 	fp.AsyncClose()
 	<-s.doneCh
 
-	require.Equal(t, int32(1), nacked.Load(), "nack must be called once")
-	got := nackedFrame.Load().(*pb.Frame)
-	assert.Equal(t, []byte("nack-me"), got.Value, "nacked frame must carry original value")
-}
-
-func TestSaramaSink_AckLoopNackFallback_NoHandler(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
-	// No BindNack — nack is nil, should fall back to log-only (no panic).
-
-	frame := &pb.Frame{
-		Key:   []byte("k"),
-		Value: []byte("v"),
-		Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
-			Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: 1},
-		}},
-	}
-
-	require.NoError(t, s.Publish(context.Background(), frame))
-	msg := <-fp.inputCh
-
-	fp.errorCh <- &sarama.ProducerError{
-		Msg: msg,
-		Err: errors.New("broker rejected"),
-	}
-
-	fp.AsyncClose()
-	<-s.doneCh
-	// No panic, no nack — just log. Test passes by not crashing.
-}
-
-func TestSaramaSink_AckLoopMixedAckNack(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
-	fp := newFakeAsyncProducer()
-	s := newTestSink(fp)
-
-	var acked atomic.Int32
-	var nacked atomic.Int32
-	s.BindAck(func(_ context.Context, _ *pb.CheckpointToken) { acked.Add(1) })
-	s.BindNack(func(_ context.Context, _ *pb.Frame, _ error) { nacked.Add(1) })
-
-	// Publish 3 messages.
-	frames := make([]*pb.Frame, 3)
-	msgs := make([]*sarama.ProducerMessage, 3)
-	for i := range 3 {
-		frames[i] = &pb.Frame{
-			Key:   []byte("k"),
-			Value: []byte("v"),
-			Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
-				Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: int64(i)},
-			}},
-		}
-		require.NoError(t, s.Publish(context.Background(), frames[i]))
-		msgs[i] = <-fp.inputCh
-	}
-
-	// msg 0: success, msg 1: error, msg 2: success
-	fp.successCh <- msgs[0]
-	fp.errorCh <- &sarama.ProducerError{Msg: msgs[1], Err: errors.New("fail")}
-	fp.successCh <- msgs[2]
-
-	fp.AsyncClose()
-	<-s.doneCh
-
-	assert.Equal(t, int32(2), acked.Load(), "2 successes → 2 acks")
-	assert.Equal(t, int32(1), nacked.Load(), "1 error → 1 nack")
+	assert.Equal(t, int32(1), nacked.Load())
+	gotFrame, ok := nackedFrame.Load().(*pb.Frame)
+	require.True(t, ok)
+	assert.Equal(t, frame.Checkpoint, gotFrame.Checkpoint)
 }

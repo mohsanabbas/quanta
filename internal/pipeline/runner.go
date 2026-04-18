@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	pb "quanta/api/proto/v1"
@@ -30,7 +31,14 @@ const (
 	outcomeAbort
 )
 
-type DeadLetterFn func(stage string, frame *pb.Frame, cause error)
+// DeadLetterFn handles permanently-failed frames once the engine gives up
+// on retries / DLQ delivery. Implementations should be best-effort and
+// idempotent.
+//
+// Returning a non-nil error signals that the dead-letter handler itself
+// failed (e.g., a custom external store write errored). The coordinator
+// logs these failures rather than silently discarding them.
+type DeadLetterFn func(stage string, frame *pb.Frame, cause error) error
 
 type Runner struct {
 	source source.Adapter
@@ -43,6 +51,10 @@ type Runner struct {
 	dlqSink       sink.Adapter
 
 	sourceErr chan error
+
+	// started flips from false to true exactly once via CAS in Start. A
+	// second Start call is a programmer error and is rejected immediately.
+	started atomic.Bool
 }
 
 type transformStage struct {
@@ -71,12 +83,8 @@ func (r *Runner) SetSource(s source.Adapter) {
 }
 
 func (r *Runner) AddSink(s sink.Adapter) {
-	if ackAware, ok := s.(sink.AckAware); ok {
-		ackAware.BindAck(r.coord.Ack)
+	if s.Caps().AckAware {
 		r.ackAwareSinks++
-	}
-	if nackAware, ok := s.(sink.NackAware); ok {
-		nackAware.BindNack(r.coord.Nack)
 	}
 	r.sinks = append(r.sinks, s)
 }
@@ -105,9 +113,24 @@ func (r *Runner) SubscribeAck(fn func(*pb.ConnectorAck)) {
 	r.coord.Subscribe(fn)
 }
 
-func (r *Runner) Start(ctx context.Context) error {
+// Validate inspects the assembled pipeline and reports configuration errors
+// that would otherwise surface only at Start. Safe to call multiple times.
+func (r *Runner) Validate() error {
 	if r.source == nil {
-		return qerr.Pipeline("start", errors.New("no source configured"))
+		return qerr.Pipeline("validate", errors.New("no source configured"))
+	}
+	if len(r.sinks) == 0 {
+		return qerr.Pipeline("validate", errors.New("no sinks configured"))
+	}
+	return nil
+}
+
+func (r *Runner) Start(ctx context.Context) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if !r.started.CompareAndSwap(false, true) {
+		return qerr.Pipeline("start", errors.New("runner already started"))
 	}
 	go func() {
 		err := r.source.Run(ctx, func(runCtx context.Context, frame *pb.Frame) error {
@@ -199,7 +222,11 @@ func (r *Runner) runStage(ctx context.Context, st transformStage, in []*pb.Frame
 		case outcomeDrop, outcomeFailed:
 			// no-op: filtered or dead-lettered
 		case outcomeAbort:
-			// context cancelled, stop processing
+			// context cancelled: stop processing remaining frames in this stage
+			if len(errEvents) > 0 {
+				r.publishErrorEvents(ctx, st, f, errEvents)
+			}
+			return out
 		}
 		if len(errEvents) > 0 {
 			r.publishErrorEvents(ctx, st, f, errEvents)
@@ -363,7 +390,7 @@ func (r *Runner) publishAll(ctx context.Context, frames []*pb.Frame) error {
 	for _, f := range frames {
 		for _, s := range r.sinks {
 			if err := s.Publish(ctx, f); err != nil {
-				return qerr.Sink("", "publish", err)
+				return qerr.Sink(s.Name(), "publish", err)
 			}
 		}
 	}

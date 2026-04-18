@@ -1,3 +1,9 @@
+// Package s3 — AWS S3 sink driver.
+//
+// Constructed via sink.Build("s3", cfg, opts). The factory builds the AWS
+// client, allocates the batch pool, starts the flushLoop goroutine, and
+// returns a ready-to-Publish adapter. Any failure releases acquired resources
+// before returning.
 package s3
 
 import (
@@ -5,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -21,17 +26,12 @@ import (
 	"quanta/sink"
 )
 
+// Client is the narrow S3 surface the driver needs. Tests inject a spy.
 type Client interface {
 	PutObject(ctx context.Context, params *s3svc.PutObjectInput, optFns ...func(*s3svc.Options)) (*s3svc.PutObjectOutput, error)
 }
 
-var (
-	_ sink.Adapter   = (*Driver)(nil)
-	_ sink.AckAware  = (*Driver)(nil)
-	_ sink.NackAware = (*Driver)(nil)
-)
-
-type Driver struct {
+type s3Driver struct {
 	cfg     Config
 	client  Client
 	encoder Encoder
@@ -47,66 +47,56 @@ type Driver struct {
 	cancel  context.CancelFunc
 }
 
-func (d *Driver) Configure(ctx context.Context, raw any) error {
-	var cfg Config
-	switch v := raw.(type) {
-	case Config:
-		cfg = v
-	case *Config:
-		if v != nil {
-			cfg = *v
-		}
-	default:
-		got := "<nil>"
-		if typ := reflect.TypeOf(raw); typ != nil {
-			got = typ.String()
-		}
-		logging.L().WarnContext(ctx, "invalid config type", "component", "sink.s3", "got", got)
-		return qerr.Sink("s3", "configure", errors.New("invalid config type"))
-	}
+var _ sink.Adapter = (*s3Driver)(nil)
 
+func (d *s3Driver) Name() string {
+	return "s3"
+}
+
+func (d *s3Driver) Caps() sink.Capabilities {
+	return sink.Capabilities{
+		AckAware:  true,
+		NackAware: true,
+	}
+}
+
+func newDriver(ctx context.Context, cfg Config, opts sink.BuildOptions) (sink.Adapter, error) {
 	if err := cfg.validate(); err != nil {
-		return err
+		return nil, err
 	}
-
 	client, err := newS3Client(ctx, &cfg)
 	if err != nil {
-		return qerr.Sink("s3", "connect", err)
+		return nil, qerr.Sink("s3", "connect", err)
 	}
-
 	enc, err := newEncoder(cfg.Format)
 	if err != nil {
-		return qerr.Sink("s3", "configure", err)
+		return nil, qerr.Sink("s3", "configure", err)
 	}
+	return newDriverWithClient(ctx, cfg, client, enc, opts), nil
+}
 
+func newDriverWithClient(ctx context.Context, cfg Config, client Client, enc Encoder, opts sink.BuildOptions) *s3Driver {
 	pool := newBatchPool(cfg.BatchSize)
-
 	flushCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
-	d.cfg = cfg
-	d.client = client
-	d.encoder = enc
-	d.pool = pool
-	d.current = pool.Get().(*batch)
-	d.sealCh = make(chan *batch, 1)
-	d.stopCh = make(chan struct{})
-	d.doneCh = make(chan struct{})
-	d.cancel = cancel
-
+	d := &s3Driver{
+		cfg:     cfg,
+		client:  client,
+		encoder: enc,
+		ack:     opts.Ack,
+		nack:    opts.Nack,
+		pool:    pool,
+		current: pool.Get().(*batch),
+		sealCh:  make(chan *batch, 1),
+		stopCh:  make(chan struct{}),
+		doneCh:  make(chan struct{}),
+		cancel:  cancel,
+	}
 	go d.flushLoop(flushCtx)
-
-	return nil
+	return d
 }
 
-func (d *Driver) BindAck(fn sink.EmitFn) {
-	d.ack = fn
-}
-
-func (d *Driver) BindNack(fn sink.NackFn) {
-	d.nack = fn
-}
-
-func (d *Driver) Publish(_ context.Context, f *pb.Frame) error {
+func (d *s3Driver) Publish(_ context.Context, f *pb.Frame) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -120,7 +110,7 @@ func (d *Driver) Publish(_ context.Context, f *pb.Frame) error {
 	return nil
 }
 
-func (d *Driver) Close(ctx context.Context) error {
+func (d *s3Driver) Close(ctx context.Context) error {
 	close(d.stopCh)
 	select {
 	case <-d.doneCh:
@@ -165,7 +155,7 @@ func newS3Client(ctx context.Context, cfg *Config) (*s3svc.Client, error) {
 	return s3svc.NewFromConfig(ac, s3opts...), nil
 }
 
-func (d *Driver) flushLoop(ctx context.Context) {
+func (d *s3Driver) flushLoop(ctx context.Context) {
 	defer close(d.doneCh)
 
 	ticker := time.NewTicker(d.cfg.FlushInterval)
@@ -186,7 +176,7 @@ func (d *Driver) flushLoop(ctx context.Context) {
 	}
 }
 
-func (d *Driver) drainSealed(ctx context.Context) {
+func (d *s3Driver) drainSealed(ctx context.Context) {
 	for {
 		select {
 		case sealed := <-d.sealCh:
@@ -197,7 +187,7 @@ func (d *Driver) drainSealed(ctx context.Context) {
 	}
 }
 
-func (d *Driver) flushPartial(ctx context.Context) {
+func (d *s3Driver) flushPartial(ctx context.Context) {
 	d.mu.Lock()
 	if d.current.len() == 0 {
 		d.mu.Unlock()
@@ -210,7 +200,7 @@ func (d *Driver) flushPartial(ctx context.Context) {
 	d.uploadBatch(ctx, partial)
 }
 
-func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
+func (d *s3Driver) uploadBatch(ctx context.Context, b *batch) {
 	records := b.records[:b.len()]
 	checkpoints := b.checkpoints[:b.len()]
 	frames := b.frames[:b.len()]
@@ -244,7 +234,7 @@ func (d *Driver) uploadBatch(ctx context.Context, b *batch) {
 	d.recycleBatch(b)
 }
 
-func (d *Driver) ackAll(ctx context.Context, checkpoints []*pb.CheckpointToken) {
+func (d *s3Driver) ackAll(ctx context.Context, checkpoints []*pb.CheckpointToken) {
 	if d.ack == nil {
 		return
 	}
@@ -253,7 +243,7 @@ func (d *Driver) ackAll(ctx context.Context, checkpoints []*pb.CheckpointToken) 
 	}
 }
 
-func (d *Driver) nackAll(ctx context.Context, frames []*pb.Frame, err error) {
+func (d *s3Driver) nackAll(ctx context.Context, frames []*pb.Frame, err error) {
 	if d.nack == nil {
 		return
 	}
@@ -262,7 +252,7 @@ func (d *Driver) nackAll(ctx context.Context, frames []*pb.Frame, err error) {
 	}
 }
 
-func (d *Driver) objectKey() string {
+func (d *s3Driver) objectKey() string {
 	name := fmt.Sprintf("%d_data%s", time.Now().UnixNano(), d.cfg.FileSuffix)
 	prefix := strings.TrimRight(d.cfg.Prefix, "/")
 	if prefix == "" {
@@ -271,7 +261,11 @@ func (d *Driver) objectKey() string {
 	return prefix + "/" + name
 }
 
-func (d *Driver) recycleBatch(b *batch) {
+func (d *s3Driver) recycleBatch(b *batch) {
 	b.reset()
 	d.pool.Put(b)
 }
+
+// errBadConfigType is returned when the registry hands the factory a config
+// of the wrong type — should never happen at runtime if DecodeConfig is sane.
+var errBadConfigType = errors.New("unexpected config type")

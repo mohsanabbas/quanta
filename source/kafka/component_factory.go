@@ -7,34 +7,11 @@ import (
 	qerr "quanta/internal/errors"
 )
 
-type BackpressureStrategy string
-
-const (
-	BackpressureStrategyCount    BackpressureStrategy = "count"
-	BackpressureStrategySize     BackpressureStrategy = "size"
-	BackpressureStrategyCombined BackpressureStrategy = "combined"
-)
-
-type CheckpointStrategy string
-
-const (
-	CheckpointStrategySlidingWindow         CheckpointStrategy = "sliding_window"
-	CheckpointStrategyApplicationControlled CheckpointStrategy = "application_controlled"
-)
-
-type CommitStrategyType string
-
-const (
-	CommitStrategyTypeAckBased CommitStrategyType = "ack_based"
-	CommitStrategyTypePeriodic CommitStrategyType = "periodic"
-	CommitStrategyTypeHybrid   CommitStrategyType = "hybrid"
-)
-
 func NewBackpressureManager(cfg Config) (BackpressureManager, error) {
 	pub := cfg.Public()
 	tun := cfg.Tuning()
-	strategy := BackpressureStrategy(pub.BackpressureStrategy)
-	if strategy == "" {
+	strategy := pub.BackpressureStrategy
+	if strategy.IsZero() {
 		strategy = BackpressureStrategyCombined
 	}
 
@@ -53,8 +30,8 @@ func NewBackpressureManager(cfg Config) (BackpressureManager, error) {
 func NewCheckpointManager(cfg Config) (CheckpointManager, error) {
 	pub := cfg.Public()
 	tun := cfg.Tuning()
-	strategy := CheckpointStrategy(pub.CheckpointStrategy)
-	if strategy == "" {
+	strategy := pub.CheckpointStrategy
+	if strategy.IsZero() {
 		strategy = CheckpointStrategySlidingWindow
 	}
 
@@ -71,8 +48,8 @@ func NewCheckpointManager(cfg Config) (CheckpointManager, error) {
 func NewCommitStrategy(cfg Config, logger *slog.Logger) (CommitStrategy, error) {
 	pub := cfg.Public()
 	tun := cfg.Tuning()
-	strategy := CommitStrategyType(pub.CommitStrategyType)
-	if strategy == "" {
+	strategy := pub.CommitStrategyType
+	if strategy.IsZero() {
 		strategy = CommitStrategyTypeHybrid
 	}
 

@@ -461,3 +461,22 @@ func TestAckCoordinator_FailNeverCommits(t *testing.T) {
 		t.Fatalf("barrier must remain until pushFrame resolves: Len=%d", coord.Len())
 	}
 }
+
+func TestAckCoordinator_FailCallbackErrorIsHandled(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	cbErr := errorString("dead-letter sink down")
+	coord := NewAckCoordinator()
+	coord.SetDeadLetter(func(string, *pb.Frame, error) error {
+		calls.Add(1)
+		return cbErr
+	})
+
+	frame := &pb.Frame{Value: []byte("bad"), Checkpoint: kafkaTok("t", 0, 9000)}
+	coord.Fail("stage-x", frame, errTest)
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("callback invocations: got %d, want 1", got)
+	}
+}

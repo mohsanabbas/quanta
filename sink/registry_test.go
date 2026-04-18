@@ -2,78 +2,104 @@ package sink
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	pb "quanta/api/proto/v1"
 )
 
-func TestNackFn_Signature(t *testing.T) {
+// fakeAdapter is a minimal Adapter used to exercise registry plumbing.
+type fakeAdapter struct {
+	caps Capabilities
+	opts BuildOptions
+}
+
+func (f *fakeAdapter) Name() string                             { return "fake" }
+func (f *fakeAdapter) Caps() Capabilities                       { return f.caps }
+func (f *fakeAdapter) Publish(context.Context, *pb.Frame) error { return nil }
+func (f *fakeAdapter) Close(context.Context) error              { return nil }
+
+func TestRegister_PanicsOnMissingFields(t *testing.T) {
 	t.Parallel()
 
-	var called bool
-	var fn NackFn = func(_ context.Context, frame *pb.Frame, err error) {
-		called = true
+	tests := []struct {
+		name string
+		give Registration
+	}{
+		{name: "no_name", give: Registration{
+			DecodeConfig: func(any) (any, error) { return nil, nil },
+			New:          func(context.Context, any, BuildOptions) (Adapter, error) { return nil, nil },
+		}},
+		{name: "no_factory", give: Registration{
+			Name:         "x",
+			DecodeConfig: func(any) (any, error) { return nil, nil },
+		}},
+		{name: "no_decode", give: Registration{
+			Name: "y",
+			New:  func(context.Context, any, BuildOptions) (Adapter, error) { return nil, nil },
+		}},
 	}
-	fn(context.Background(), &pb.Frame{Value: []byte("v")}, errStub)
-	if !called {
-		t.Fatal("NackFn was not invoked")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("Register did not panic on invalid registration")
+				}
+			}()
+			Register(tt.give)
+		})
 	}
 }
 
-func TestNackAware_BindNack(t *testing.T) {
+func TestBuild_UnknownAdapter(t *testing.T) {
 	t.Parallel()
 
-	s := &nackCaptureSink{}
-	var iface NackAware = s
+	_, err := Build(context.Background(), "nonexistent-driver-xyzzy", nil, BuildOptions{})
+	if err == nil {
+		t.Fatal("Build with unknown name must return error")
+	}
+}
 
-	var captured *pb.Frame
-	iface.BindNack(func(_ context.Context, frame *pb.Frame, err error) {
-		captured = frame
+func TestBuild_DecodeError_AttributedToDriver(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("bad config")
+	Register(Registration{
+		Name:         "decode-fail-driver",
+		DecodeConfig: func(any) (any, error) { return nil, wantErr },
+		New:          func(context.Context, any, BuildOptions) (Adapter, error) { return nil, nil },
 	})
 
-	f := &pb.Frame{Key: []byte("k"), Value: []byte("v")}
-	s.simulateFailure(context.Background(), f, errStub)
-
-	if captured == nil {
-		t.Fatal("NackFn was not called on simulated failure")
-	}
-	if string(captured.Key) != "k" {
-		t.Fatalf("captured frame key: got %q, want %q", captured.Key, "k")
+	_, err := Build(context.Background(), "decode-fail-driver", nil, BuildOptions{})
+	if err == nil || !errors.Is(err, wantErr) {
+		t.Fatalf("Build error: got %v, want chain containing %v", err, wantErr)
 	}
 }
 
-func TestNackAware_AckAware_Coexistence(t *testing.T) {
+func TestBuild_PassesOptionsToFactory(t *testing.T) {
 	t.Parallel()
 
-	s := &dualAwareSink{}
-	var _ AckAware = s
-	var _ NackAware = s
-}
+	var gotOpts BuildOptions
+	Register(Registration{
+		Name:         "opts-capture-driver",
+		DecodeConfig: func(any) (any, error) { return nil, nil },
+		New: func(_ context.Context, _ any, opts BuildOptions) (Adapter, error) {
+			gotOpts = opts
+			return &fakeAdapter{caps: Capabilities{AckAware: true}, opts: opts}, nil
+		},
+	})
 
-var errStub = errorString("stub error")
-
-type errorString string
-
-func (e errorString) Error() string { return string(e) }
-
-type nackCaptureSink struct {
-	nackFn NackFn
-}
-
-func (s *nackCaptureSink) BindNack(fn NackFn) {
-	s.nackFn = fn
-}
-
-func (s *nackCaptureSink) simulateFailure(ctx context.Context, f *pb.Frame, err error) {
-	if s.nackFn != nil {
-		s.nackFn(ctx, f, err)
+	wantAck := func(context.Context, *pb.CheckpointToken) {}
+	a, err := Build(context.Background(), "opts-capture-driver", nil, BuildOptions{Ack: wantAck})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if gotOpts.Ack == nil {
+		t.Fatal("BuildOptions.Ack not propagated to factory")
+	}
+	if !a.Caps().AckAware {
+		t.Fatal("Caps().AckAware: got false, want true")
 	}
 }
-
-type dualAwareSink struct {
-	ackFn  EmitFn
-	nackFn NackFn
-}
-
-func (s *dualAwareSink) BindAck(fn EmitFn)  { s.ackFn = fn }
-func (s *dualAwareSink) BindNack(fn NackFn) { s.nackFn = fn }
