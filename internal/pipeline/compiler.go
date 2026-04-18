@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"gopkg.in/yaml.v3"
+
 	"quanta/internal/config"
 	qerr "quanta/internal/errors"
 	"quanta/internal/transform"
@@ -121,5 +123,15 @@ func buildSink(ctx context.Context, r *Runner, name string, raw any) (sink.Adapt
 		Ack:  r.coord.Ack,
 		Nack: r.coord.Nack,
 	}
-	return sink.Build(ctx, name, raw, opts)
+	return sink.Build(ctx, name, normalizeRawConfig(raw), opts)
+}
+
+// normalizeRawConfig collapses a typed-nil *yaml.Node into an untyped nil so
+// downstream DecodeConfig implementations can uniformly treat "no config" the
+// same regardless of whether the YAML key was absent or explicitly null.
+func normalizeRawConfig(raw any) any {
+	if node, ok := raw.(*yaml.Node); ok && node == nil {
+		return nil
+	}
+	return raw
 }

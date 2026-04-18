@@ -37,7 +37,7 @@ func decodeConfig(raw any) (any, error) {
 func newS3Sink(ctx context.Context, raw any, opts sink.BuildOptions) (sink.Adapter, error) {
 	cfg, ok := raw.(Config)
 	if !ok {
-		return nil, qerr.Sink("s3", "build", errBadConfigType)
+		return nil, qerr.Sink("s3", "build", qerr.Wrapf(errBadConfigType, "got %T", raw))
 	}
 	return newDriver(ctx, cfg, opts)
 }

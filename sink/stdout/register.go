@@ -2,7 +2,7 @@ package stdout
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"quanta/internal/config"
 	qerr "quanta/internal/errors"
@@ -40,7 +40,7 @@ func decodeConfig(raw any) (any, error) {
 func newStdoutSink(_ context.Context, raw any, opts sink.BuildOptions) (sink.Adapter, error) {
 	cfg, ok := raw.(Config)
 	if !ok {
-		return nil, qerr.Sink("stdout", "build", errors.New("unexpected config type"))
+		return nil, qerr.Sink("stdout", "build", fmt.Errorf("unexpected config type %T", raw))
 	}
 	return newStdoutDriver(cfg, opts), nil
 }

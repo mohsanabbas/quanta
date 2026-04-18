@@ -2,7 +2,7 @@ package kafka
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	qerr "quanta/internal/errors"
 	"quanta/source"
@@ -23,7 +23,7 @@ func loadConfigFromPath(path string) (any, error) {
 func newKafkaSource(ctx context.Context, raw any) (source.Adapter, error) {
 	cfg, ok := raw.(Config)
 	if !ok {
-		return nil, qerr.Source("kafka", "build", errors.New("unexpected config type"))
+		return nil, qerr.Source("kafka", "build", fmt.Errorf("unexpected config type %T", raw))
 	}
 	return newSaramaDriver(ctx, cfg)
 }

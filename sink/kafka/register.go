@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"quanta/internal/config"
 	qerr "quanta/internal/errors"
@@ -37,7 +38,7 @@ func decodeConfig(raw any) (any, error) {
 func newKafkaSink(ctx context.Context, raw any, opts sink.BuildOptions) (sink.Adapter, error) {
 	cfg, ok := raw.(Config)
 	if !ok {
-		return nil, qerr.Sink("kafka", "build", errors.New("unexpected config type"))
+		return nil, qerr.Sink("kafka", "build", fmt.Errorf("unexpected config type %T", raw))
 	}
 	return newSaramaSink(ctx, cfg, opts)
 }
