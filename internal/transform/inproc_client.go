@@ -2,14 +2,9 @@ package transform
 
 import (
 	"context"
-	"errors"
 
 	pb "quanta/api/proto/v1"
-
-	"google.golang.org/grpc"
 )
-
-var ErrStreamNotSupported = errors.New("streaming not supported for in-process client")
 
 type Transformer interface {
 	Metadata(context.Context) (*pb.MetadataResponse, error)
@@ -37,10 +32,6 @@ func (c *InProcessClient) Health(ctx context.Context) (*pb.HealthResponse, error
 
 func (c *InProcessClient) Transform(ctx context.Context, req *pb.TransformRequest) (*pb.TransformResponse, error) {
 	return c.impl.Transform(ctx, req)
-}
-
-func (c *InProcessClient) Stream(context.Context, ...grpc.CallOption) (pb.TransformService_TransformStreamClient, error) {
-	return nil, ErrStreamNotSupported
 }
 
 func (c *InProcessClient) Close() error { return nil }

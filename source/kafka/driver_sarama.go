@@ -29,7 +29,19 @@ type SaramaDriver struct {
 
 var _ Adapter = (*SaramaDriver)(nil)
 
-func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
+// newSaramaDriver constructs a fully-initialised SaramaDriver: validates the
+// config, parses the Kafka version, dials the brokers, and joins the
+// consumer group. On any failure after the Sarama client is created, the
+// client is closed before returning.
+func newSaramaDriver(ctx context.Context, cfg Config) (*SaramaDriver, error) {
+	d := &SaramaDriver{}
+	if err := d.init(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (d *SaramaDriver) init(ctx context.Context, cfg Config) error {
 	d.cfg = cfg
 	pub := cfg.Public()
 	tun := cfg.Tuning()
@@ -49,9 +61,9 @@ func (d *SaramaDriver) Configure(ctx context.Context, cfg Config) error {
 		slog.String("topics", strings.Join(pub.Topics, ",")),
 		slog.String("brokers", strings.Join(pub.Brokers, ",")),
 		slog.Bool("sarama_verbose", pub.SaramaVerbose),
-		slog.String("backpressure_strategy", pub.BackpressureStrategy),
-		slog.String("checkpoint_strategy", pub.CheckpointStrategy),
-		slog.String("commit_strategy", pub.CommitStrategyType),
+		slog.String("backpressure_strategy", pub.BackpressureStrategy.String()),
+		slog.String("checkpoint_strategy", pub.CheckpointStrategy.String()),
+		slog.String("commit_strategy", pub.CommitStrategyType.String()),
 	}
 
 	d.loggerWithContext(ctx).Info("configuring kafka source driver")

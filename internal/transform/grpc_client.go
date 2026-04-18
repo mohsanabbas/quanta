@@ -56,10 +56,6 @@ func (c *GRPCClient) Transform(ctx context.Context, req *pb.TransformRequest) (*
 	return c.svc.Transform(ctx, req)
 }
 
-func (c *GRPCClient) Stream(ctx context.Context, opts ...grpc.CallOption) (pb.TransformService_TransformStreamClient, error) {
-	return c.svc.TransformStream(ctx, opts...)
-}
-
 func (c *GRPCClient) Close() error {
 	if c.conn != nil {
 		return c.conn.Close()

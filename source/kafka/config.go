@@ -29,19 +29,19 @@ const (
 )
 
 type PublicConfig struct {
-	Brokers              []string   `koanf:"brokers"`
-	Topics               []string   `koanf:"topics"`
-	GroupID              string     `koanf:"group_id"`
-	StartFrom            string     `koanf:"start_from"`
-	Version              string     `koanf:"version"`
-	TLSEn                bool       `koanf:"tls_enabled"`
-	SASLUser             string     `koanf:"sasl_user"`
-	SASLPass             string     `koanf:"sasl_pass"`
-	CommitMode           CommitMode `koanf:"commit_mode"`
-	SaramaVerbose        bool       `koanf:"sarama_verbose"`
-	BackpressureStrategy string     `koanf:"backpressure_strategy"`
-	CheckpointStrategy   string     `koanf:"checkpoint_strategy"`
-	CommitStrategyType   string     `koanf:"commit_strategy_type"`
+	Brokers              []string             `koanf:"brokers"`
+	Topics               []string             `koanf:"topics"`
+	GroupID              string               `koanf:"group_id"`
+	StartFrom            string               `koanf:"start_from"`
+	Version              string               `koanf:"version"`
+	TLSEn                bool                 `koanf:"tls_enabled"`
+	SASLUser             string               `koanf:"sasl_user"`
+	SASLPass             string               `koanf:"sasl_pass"`
+	CommitMode           CommitMode           `koanf:"commit_mode"`
+	SaramaVerbose        bool                 `koanf:"sarama_verbose"`
+	BackpressureStrategy BackpressureStrategy `koanf:"backpressure_strategy"`
+	CheckpointStrategy   CheckpointStrategy   `koanf:"checkpoint_strategy"`
+	CommitStrategyType   CommitStrategyType   `koanf:"commit_strategy_type"`
 }
 
 type Tuning struct {
@@ -163,18 +163,15 @@ func applyPublicDefaults(c *PublicConfig) {
 		c.StartFrom = "newest"
 	}
 	c.StartFrom = strings.ToLower(c.StartFrom)
-	if c.BackpressureStrategy == "" {
-		c.BackpressureStrategy = "combined"
+	if c.BackpressureStrategy.IsZero() {
+		c.BackpressureStrategy = BackpressureStrategyCombined
 	}
-	c.BackpressureStrategy = strings.ToLower(c.BackpressureStrategy)
-	if c.CheckpointStrategy == "" {
-		c.CheckpointStrategy = "sliding_window"
+	if c.CheckpointStrategy.IsZero() {
+		c.CheckpointStrategy = CheckpointStrategySlidingWindow
 	}
-	c.CheckpointStrategy = strings.ToLower(c.CheckpointStrategy)
-	if c.CommitStrategyType == "" {
-		c.CommitStrategyType = "hybrid"
+	if c.CommitStrategyType.IsZero() {
+		c.CommitStrategyType = CommitStrategyTypeHybrid
 	}
-	c.CommitStrategyType = strings.ToLower(c.CommitStrategyType)
 }
 
 func validatePublic(c PublicConfig) error {
@@ -196,6 +193,15 @@ func validatePublic(c PublicConfig) error {
 	case "oldest", "newest":
 	default:
 		return qerr.Config("kafka", "validate", errors.New("unsupported start_from"))
+	}
+	if c.BackpressureStrategy.IsZero() {
+		return qerr.Config("kafka", "validate", errors.New("backpressure_strategy required"))
+	}
+	if c.CheckpointStrategy.IsZero() {
+		return qerr.Config("kafka", "validate", errors.New("checkpoint_strategy required"))
+	}
+	if c.CommitStrategyType.IsZero() {
+		return qerr.Config("kafka", "validate", errors.New("commit_strategy_type required"))
 	}
 	return nil
 }

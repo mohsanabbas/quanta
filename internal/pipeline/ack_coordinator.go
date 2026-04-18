@@ -121,14 +121,21 @@ func (c *AckCoordinator) CommitNow(tok *pb.CheckpointToken) {
 // The checkpoint lifecycle is handled by the caller pushFrame:
 //   - All frames fail pushFrame calls CommitNow
 //   - Some frames survive → the surviving barrier commits when sinks ack
+//
+// If the dead-letter callback itself returns an error, the failure is logged
+// at error level. Previously the return value was discarded.
 func (c *AckCoordinator) Fail(stage string, frame *pb.Frame, cause error) {
 	slog.Error("permanent failure, dead-lettering frame",
 		"stage", stage, "error", cause)
 	c.mu.Lock()
 	fn := c.dlFn
 	c.mu.Unlock()
-	if fn != nil {
-		fn(stage, frame, cause)
+	if fn == nil {
+		return
+	}
+	if err := fn(stage, frame, cause); err != nil {
+		slog.Error("dead-letter callback failed",
+			"stage", stage, "original_error", cause, "callback_error", err)
 	}
 }
 

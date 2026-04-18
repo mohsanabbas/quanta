@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"gopkg.in/yaml.v3"
+
 	"quanta/internal/config"
 	qerr "quanta/internal/errors"
 	"quanta/internal/transform"
@@ -37,11 +39,6 @@ func Compile(ctx context.Context, path string) (*Runner, error) {
 }
 
 func compileSource(ctx context.Context, cfg config.PipelineConfig, r *Runner) error {
-	src, err := source.New(cfg.Source.Kind)
-	if err != nil {
-		return qerr.Source(cfg.Source.Kind, "create", err)
-	}
-
 	confPath := cfg.Source.ResolvedConfigPath()
 	if confPath == "" {
 		return qerr.Config(cfg.Source.Kind, "resolve", errors.New("missing config_file for source"))
@@ -52,8 +49,9 @@ func compileSource(ctx context.Context, cfg config.PipelineConfig, r *Runner) er
 		return qerr.Config(cfg.Source.Kind, "load", err)
 	}
 
-	if err := src.Configure(ctx, sourceCfg); err != nil {
-		return qerr.Source(cfg.Source.Kind, "configure", err)
+	src, err := source.Build(ctx, cfg.Source.Kind, sourceCfg)
+	if err != nil {
+		return err
 	}
 
 	r.SetSource(src)
@@ -69,17 +67,9 @@ func compileTransformers(ctx context.Context, cfg config.PipelineConfig, r *Runn
 		}
 		var errSink sink.Adapter
 		if t.ErrorSink != nil {
-			drv, proto, sinkErr := sink.New(t.ErrorSink.Sink)
+			drv, sinkErr := buildSink(ctx, r, t.ErrorSink.Sink, t.ErrorSink.Config.Node)
 			if sinkErr != nil {
-				return qerr.Sink(t.ErrorSink.Sink, "create-error-sink", sinkErr)
-			}
-			if t.ErrorSink.Config.Node != nil {
-				if decErr := sink.DecodeYAML(t.ErrorSink.Config.Node, proto); decErr != nil {
-					return qerr.Config(t.ErrorSink.Sink, "decode-error-sink", decErr)
-				}
-			}
-			if cfgErr := drv.Configure(ctx, proto); cfgErr != nil {
-				return qerr.Sink(t.ErrorSink.Sink, "configure-error-sink", cfgErr)
+				return sinkErr
 			}
 			errSink = drv
 		}
@@ -105,23 +95,10 @@ func newTransformClient(ctx context.Context, t config.TransformerConfig) (transf
 
 func compileSinks(ctx context.Context, cfg config.PipelineConfig, r *Runner) error {
 	for _, name := range cfg.Sinks {
-		drv, proto, err := sink.New(name)
+		drv, err := buildSink(ctx, r, name, cfg.SinkConfig(name))
 		if err != nil {
-			return qerr.Sink(name, "create", err)
+			return err
 		}
-
-		sinkCfg := proto
-		if node := cfg.SinkConfig(name); node != nil {
-			if err := sink.DecodeYAML(node, proto); err != nil {
-				return qerr.Config(name, "decode", err)
-			}
-			sinkCfg = proto
-		}
-
-		if err := drv.Configure(ctx, sinkCfg); err != nil {
-			return qerr.Sink(name, "configure", err)
-		}
-
 		r.AddSink(drv)
 	}
 	return nil
@@ -131,24 +108,30 @@ func compileDLQ(ctx context.Context, cfg config.PipelineConfig, r *Runner) error
 	if cfg.DLQ == nil || !cfg.DLQ.Enabled {
 		return nil
 	}
-
-	drv, proto, err := sink.New(cfg.DLQ.Sink)
+	drv, err := buildSink(ctx, r, cfg.DLQ.Sink, cfg.DLQ.Config.Node)
 	if err != nil {
-		return qerr.Sink(cfg.DLQ.Sink, "create-dlq", err)
+		return err
 	}
-
-	sinkCfg := proto
-	if cfg.DLQ.Config.Node != nil {
-		if err := sink.DecodeYAML(cfg.DLQ.Config.Node, proto); err != nil {
-			return qerr.Config(cfg.DLQ.Sink, "decode-dlq", err)
-		}
-		sinkCfg = proto
-	}
-
-	if err := drv.Configure(ctx, sinkCfg); err != nil {
-		return qerr.Sink(cfg.DLQ.Sink, "configure-dlq", err)
-	}
-
 	r.SetDLQSink(drv)
 	return nil
+}
+
+// buildSink resolves a sink driver, decodes its raw config, and constructs
+// the adapter with ack/nack callbacks bound to the runner's coordinator.
+func buildSink(ctx context.Context, r *Runner, name string, raw any) (sink.Adapter, error) {
+	opts := sink.BuildOptions{
+		Ack:  r.coord.Ack,
+		Nack: r.coord.Nack,
+	}
+	return sink.Build(ctx, name, normalizeRawConfig(raw), opts)
+}
+
+// normalizeRawConfig collapses a typed-nil *yaml.Node into an untyped nil so
+// downstream DecodeConfig implementations can uniformly treat "no config" the
+// same regardless of whether the YAML key was absent or explicitly null.
+func normalizeRawConfig(raw any) any {
+	if node, ok := raw.(*yaml.Node); ok && node == nil {
+		return nil
+	}
+	return raw
 }

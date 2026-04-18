@@ -19,19 +19,19 @@ import (
 
 // testDLQSink is a minimal sink registered under "test-dlq" for compiler tests.
 type testDLQSink struct {
-	configured bool
-	published  *pb.Frame
-	closed     bool
+	built     bool
+	published *pb.Frame
+	closed    bool
 }
 
-func (s *testDLQSink) Configure(_ context.Context, _ any) error {
-	s.configured = true
-	return nil
-}
+func (s *testDLQSink) Name() string            { return "test-dlq" }
+func (s *testDLQSink) Caps() sink.Capabilities { return sink.Capabilities{} }
+
 func (s *testDLQSink) Publish(_ context.Context, f *pb.Frame) error {
 	s.published = f
 	return nil
 }
+
 func (s *testDLQSink) Close(_ context.Context) error {
 	s.closed = true
 	return nil
@@ -44,13 +44,13 @@ var capturedDLQSink *testDLQSink
 
 func init() {
 	sink.Register(sink.Registration{
-		Name: "test-dlq",
-		New: func() sink.Adapter {
-			s := &testDLQSink{}
+		Name:         "test-dlq",
+		DecodeConfig: func(any) (any, error) { return struct{}{}, nil },
+		New: func(_ context.Context, _ any, _ sink.BuildOptions) (sink.Adapter, error) {
+			s := &testDLQSink{built: true}
 			capturedDLQSink = s
-			return s
+			return s, nil
 		},
-		ConfigProto: func() any { return &struct{}{} },
 	})
 }
 
@@ -68,7 +68,7 @@ func TestCompileDLQ_Enabled(t *testing.T) {
 	err := compileDLQ(context.Background(), cfg, r)
 	require.NoError(t, err)
 	assert.True(t, r.coord.HasDLQ(), "coordinator must have DLQ after compileDLQ")
-	assert.True(t, capturedDLQSink.configured, "DLQ sink must be configured")
+	assert.True(t, capturedDLQSink.built, "DLQ sink must be built via factory")
 	assert.NotNil(t, r.dlqSink, "runner must hold DLQ sink reference")
 }
 

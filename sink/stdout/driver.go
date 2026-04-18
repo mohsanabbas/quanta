@@ -1,19 +1,18 @@
+// Package stdout — debug/test sink that prints frames to stdout.
 package stdout
 
 import (
 	"context"
-	"errors"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	pb "quanta/api/proto/v1"
-	qerr "quanta/internal/errors"
 	"quanta/internal/logging"
 	"quanta/sink"
 )
 
+// Config controls how frames are printed and acknowledged.
 type Config struct {
 	DelayMS       int  `yaml:"delay_ms"`
 	PrintCounter  bool `yaml:"print_counter"`
@@ -22,39 +21,31 @@ type Config struct {
 	ValueMaxBytes int  `yaml:"value_max_bytes"`
 }
 
-type driver struct {
+type stdoutDriver struct {
 	cfg     Config
 	ack     sink.EmitFn
 	mu      sync.Mutex
 	pending []*pb.CheckpointToken
 }
 
-var (
-	_ sink.Adapter  = (*driver)(nil)
-	_ sink.AckAware = (*driver)(nil)
-)
+var _ sink.Adapter = (*stdoutDriver)(nil)
 
 var seq uint64
 
-func (d *driver) Configure(_ context.Context, raw any) error {
-	cfg, ok := raw.(Config)
-	if !ok {
-		if p, ok2 := raw.(*Config); ok2 && p != nil {
-			cfg = *p
-		} else {
-			got := reflect.TypeOf(raw).String()
-			logging.L().With("component", "sink.stdout").Error("invalid config type", "got", got)
-			return qerr.Sink("stdout", "configure", errors.New("invalid config type"))
-		}
-	}
+func newStdoutDriver(cfg Config, opts sink.BuildOptions) *stdoutDriver {
 	if cfg.ValueMaxBytes <= 0 {
 		cfg.ValueMaxBytes = 120
 	}
-	d.cfg = cfg
-	return nil
+	return &stdoutDriver{cfg: cfg, ack: opts.Ack}
 }
 
-func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
+func (d *stdoutDriver) Name() string { return "stdout" }
+
+func (d *stdoutDriver) Caps() sink.Capabilities {
+	return sink.Capabilities{AckAware: true}
+}
+
+func (d *stdoutDriver) Publish(ctx context.Context, f *pb.Frame) error {
 	if d.cfg.DelayMS > 0 {
 		delay := time.Duration(d.cfg.DelayMS) * time.Millisecond
 		select {
@@ -90,14 +81,12 @@ func (d *driver) Publish(ctx context.Context, f *pb.Frame) error {
 	return nil
 }
 
-func (d *driver) Close(ctx context.Context) error {
+func (d *stdoutDriver) Close(ctx context.Context) error {
 	d.flush(ctx)
 	return nil
 }
 
-func (d *driver) BindAck(fn sink.EmitFn) { d.ack = fn }
-
-func (d *driver) flush(ctx context.Context) {
+func (d *stdoutDriver) flush(ctx context.Context) {
 	d.mu.Lock()
 	if len(d.pending) == 0 {
 		d.mu.Unlock()

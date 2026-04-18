@@ -7,22 +7,6 @@ import (
 	qerr "quanta/internal/errors"
 )
 
-type AuthStrategy string
-
-const (
-	AuthIAMRole     AuthStrategy = "iam-role"
-	AuthStaticCreds AuthStrategy = "static"
-	AuthEnvVars     AuthStrategy = "env"
-)
-
-type CompressionType string
-
-const (
-	CompressionNone   CompressionType = "none"
-	CompressionGzip   CompressionType = "gzip"
-	CompressionSnappy CompressionType = "snappy"
-)
-
 type Config struct {
 	Bucket     string `yaml:"bucket"`
 	Region     string `yaml:"region"`
