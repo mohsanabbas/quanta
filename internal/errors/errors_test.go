@@ -292,6 +292,9 @@ func TestErrorFormatVerbose(t *testing.T) {
 	assert.Contains(t, verbose, "sink[stdout] publish: disk full")
 	assert.Contains(t, verbose, "TestErrorFormatVerbose",
 		"%+v should include the captured stack")
+	assert.Contains(t, verbose, "internal/errors/errors_test.go:")
+	assert.NotContains(t, verbose, "/Users/")
+	assert.NotContains(t, verbose, "/usr/local/go/")
 	assert.Contains(t, fmt.Sprintf("%q", err), `"sink[stdout] publish: disk full"`)
 }
 
@@ -310,6 +313,9 @@ func TestErrorLogValue(t *testing.T) {
 	assert.Equal(t, "stream", got["op"])
 	assert.Equal(t, "eof", got["cause"])
 	assert.Contains(t, got["origin"], "TestErrorLogValue")
+	assert.Contains(t, got["origin"], "internal/errors/errors_test.go:")
+	assert.NotContains(t, got["origin"], "/Users/")
+	assert.NotContains(t, got["origin"], "/usr/local/go/")
 }
 
 func TestOpaqueHidesCause(t *testing.T) {
@@ -350,4 +356,28 @@ func TestOpaqueLogValue(t *testing.T) {
 	assert.Equal(t, "transport unavailable", got["public"])
 	assert.Equal(t, cause.Error(), got["hidden_cause"])
 	assert.Contains(t, got["origin"], "TestOpaqueLogValue")
+	assert.Contains(t, got["origin"], "internal/errors/errors_test.go:")
+	assert.NotContains(t, got["origin"], "/Users/")
+	assert.NotContains(t, got["origin"], "/usr/local/go/")
+}
+
+func TestSourceFileSanitizesPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		give string
+		want string
+	}{
+		{name: "absolute_repo_path", give: "/Users/me/streaming/quanta/cmd/engine/main.go", want: "cmd/engine/main.go"},
+		{name: "trimpath_repo_path", give: "quanta/internal/errors/errors.go", want: "internal/errors/errors.go"},
+		{name: "goroot_path", give: "/usr/local/go/src/runtime/proc.go", want: "runtime/proc.go"},
+		{name: "container_path", give: "/app/main.go", want: "main.go"},
+		{name: "windows_repo_path", give: `C:\build\quanta\cmd\engine\main.go`, want: "cmd/engine/main.go"},
+		{name: "fallback", give: "/tmp/build/main.go", want: "main.go"},
+		{name: "empty", give: "", want: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sourceFile(tt.give))
+		})
+	}
 }

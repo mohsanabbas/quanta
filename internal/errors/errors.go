@@ -62,6 +62,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 )
 
 type Kind struct {
@@ -71,7 +72,7 @@ type Kind struct {
 
 func (k Kind) String() string {
 	if k.name == "" {
-		return "unknown"
+		return unknown
 	}
 	return k.name
 }
@@ -148,6 +149,11 @@ var (
 const stackDepth = 16
 
 const (
+	modulePath = "quanta"
+	unknown    = "unknown"
+)
+
+const (
 	newErrSkip = 3
 	opaqueSkip = 2
 )
@@ -184,7 +190,31 @@ func originFrame(pcs []uintptr) string {
 	if f.Function == "" && f.File == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Function)
+	return frameOrigin(f)
+}
+
+func frameOrigin(f runtime.Frame) string {
+	return fmt.Sprintf("%s:%d %s", sourceFile(f.File), f.Line, f.Function)
+}
+
+func sourceFile(file string) string {
+	if file == "" {
+		return unknown
+	}
+	file = strings.ReplaceAll(file, "\\", "/")
+	if rest, ok := strings.CutPrefix(file, modulePath+"/"); ok {
+		return rest
+	}
+	if index := strings.LastIndex(file, "/"+modulePath+"/"); index >= 0 {
+		return file[index+len(modulePath)+2:]
+	}
+	if index := strings.LastIndex(file, "/src/"); index >= 0 {
+		return file[index+len("/src/"):]
+	}
+	if index := strings.LastIndexByte(file, '/'); index >= 0 && index+1 < len(file) {
+		return file[index+1:]
+	}
+	return file
 }
 
 func (e *Error) Stack() []runtime.Frame {
@@ -219,7 +249,7 @@ func (e *Error) Format(s fmt.State, verb rune) {
 		if s.Flag('+') {
 			_, _ = fmt.Fprint(s, e.Error())
 			for _, f := range e.Stack() {
-				_, _ = fmt.Fprintf(s, "\n\t%s\n\t\t%s:%d", f.Function, f.File, f.Line)
+				_, _ = fmt.Fprintf(s, "\n\t%s\n\t\t%s:%d", f.Function, sourceFile(f.File), f.Line)
 			}
 			return
 		}
