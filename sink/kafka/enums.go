@@ -20,10 +20,6 @@ import (
 	qerr "quanta/internal/errors"
 )
 
-// ---------------------------------------------------------------------------
-// Acks — producer durability level.
-// ---------------------------------------------------------------------------
-
 type Acks struct{ slug string }
 
 var (
@@ -60,10 +56,6 @@ func (v *Acks) UnmarshalText(text []byte) error {
 	*v = parsed
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Compression — producer compression codec.
-// ---------------------------------------------------------------------------
 
 type Compression struct{ slug string }
 

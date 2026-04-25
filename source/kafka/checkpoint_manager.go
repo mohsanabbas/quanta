@@ -41,7 +41,7 @@ func (c *SlidingWindowCheckpointManager) Track(offset int64, size int64) error {
 	}
 
 	backoff := _spinBackoff
-	for attempt := 0; attempt < _maxSpinAttempts; attempt++ {
+	for range _maxSpinAttempts {
 		if c.tracker.Reserve(offset) != InvalidSlot {
 			c.acker.Track(offset, AckHandle{offset: offset, bytes: size})
 			return nil

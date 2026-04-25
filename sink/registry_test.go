@@ -8,7 +8,6 @@ import (
 	pb "quanta/api/proto/v1"
 )
 
-// fakeAdapter is a minimal Adapter used to exercise registry plumbing.
 type fakeAdapter struct {
 	caps Capabilities
 	opts BuildOptions

@@ -13,11 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---------------------------------------------------------------------------
-// compileDLQ tests
-// ---------------------------------------------------------------------------
-
-// testDLQSink is a minimal sink registered under "test-dlq" for compiler tests.
 type testDLQSink struct {
 	built     bool
 	published *pb.Frame
@@ -39,7 +34,6 @@ func (s *testDLQSink) Close(_ context.Context) error {
 
 var _ sink.Adapter = (*testDLQSink)(nil)
 
-// capturedDLQSink holds the last instance created by the factory.
 var capturedDLQSink *testDLQSink
 
 func init() {

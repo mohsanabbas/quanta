@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,8 +22,8 @@ func TestKindString(t *testing.T) {
 		{name: "transform", give: KindTransform, want: "transform"},
 		{name: "sink", give: KindSink, want: "sink"},
 		{name: "pipeline", give: KindPipeline, want: "pipeline"},
-		{name: "zero", give: Kind(0), want: "unknown"},
-		{name: "out_of_range", give: Kind(99), want: "unknown"},
+		{name: "zero", give: Kind{}, want: "unknown"},
+		{name: "unknown_sentinel", give: KindUnknown, want: "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -212,4 +213,141 @@ func TestStdlibCompatibility(t *testing.T) {
 	e, ok := errors.AsType[*Error](wrapped)
 	require.True(t, ok)
 	assert.Equal(t, KindConfig, e.Kind)
+}
+
+func TestKindFromString(t *testing.T) {
+	tests := []struct {
+		name    string
+		give    string
+		want    Kind
+		wantErr bool
+	}{
+		{"config", "config", KindConfig, false},
+		{"transport", "transport", KindTransport, false},
+		{"source", "source", KindSource, false},
+		{"transform", "transform", KindTransform, false},
+		{"sink", "sink", KindSink, false},
+		{"pipeline", "pipeline", KindPipeline, false},
+		{"unknown", "bogus", KindUnknown, true},
+		{"empty", "", KindUnknown, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := KindFromString(tt.give)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestKindIsZero(t *testing.T) {
+	assert.True(t, Kind{}.IsZero())
+	assert.True(t, KindUnknown.IsZero())
+	assert.False(t, KindConfig.IsZero())
+}
+
+func TestErrorPublic(t *testing.T) {
+	tests := []struct {
+		name string
+		give error
+		want string
+	}{
+		{"config", Config("k", "validate", errors.New("x")), "configuration error"},
+		{"transport", Transport("g", "dial", errors.New("x")), "transport error"},
+		{"source", Source("k", "run", errors.New("x")), "ingress error"},
+		{"transform", Transform("u", "call", errors.New("x")), "processing error"},
+		{"sink", Sink("s", "publish", errors.New("x")), "egress error"},
+		{"pipeline", Pipeline("compile", errors.New("x")), "pipeline error"},
+		{"nil_receiver", (*Error)(nil), "internal error"},
+		{"unknown_kind", &Error{Kind: KindUnknown, Err: errors.New("x")}, "internal error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e, ok := tt.give.(*Error)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, e.Public())
+		})
+	}
+}
+
+func TestErrorStackCaptured(t *testing.T) {
+	err := Source("kafka", "dial", errors.New("boom"))
+	e, ok := Extract(err)
+	require.True(t, ok)
+	frames := e.Stack()
+	require.NotEmpty(t, frames, "origin constructor should capture a stack")
+	assert.Contains(t, frames[0].Function, "TestErrorStackCaptured",
+		"top frame should be the caller of the constructor")
+}
+
+func TestErrorFormatVerbose(t *testing.T) {
+	err := Sink("stdout", "publish", errors.New("disk full"))
+	plain := fmt.Sprintf("%v", err)
+	verbose := fmt.Sprintf("%+v", err)
+	assert.Equal(t, "sink[stdout] publish: disk full", plain)
+	assert.Contains(t, verbose, "sink[stdout] publish: disk full")
+	assert.Contains(t, verbose, "TestErrorFormatVerbose",
+		"%+v should include the captured stack")
+	assert.Contains(t, fmt.Sprintf("%q", err), `"sink[stdout] publish: disk full"`)
+}
+
+func TestErrorLogValue(t *testing.T) {
+	err := Transform("uppercase", "stream", errors.New("eof"))
+	e, ok := Extract(err)
+	require.True(t, ok)
+	v := e.LogValue()
+	require.Equal(t, slog.KindGroup, v.Kind())
+	got := map[string]string{}
+	for _, a := range v.Group() {
+		got[a.Key] = a.Value.String()
+	}
+	assert.Equal(t, "transform", got["kind"])
+	assert.Equal(t, "uppercase", got["component"])
+	assert.Equal(t, "stream", got["op"])
+	assert.Equal(t, "eof", got["cause"])
+	assert.Contains(t, got["origin"], "TestErrorLogValue")
+}
+
+func TestOpaqueHidesCause(t *testing.T) {
+	cause := Source("kafka", "dial", errors.New("connection refused"))
+	op := Opaque(KindSource, "ingress unavailable", cause)
+
+	assert.Equal(t, "ingress unavailable", op.Error())
+
+	_, ok := errors.AsType[*Error](op)
+	assert.False(t, ok, "opaque must not expose *Error via AsType")
+	assert.False(t, errors.Is(op, cause), "opaque must not unwrap to hidden cause")
+
+	oe, ok := op.(interface {
+		Public() string
+		Cause() error
+	})
+	require.True(t, ok)
+	assert.Equal(t, "ingress unavailable", oe.Public())
+	assert.Equal(t, cause, oe.Cause())
+}
+
+func TestOpaqueNilCause(t *testing.T) {
+	assert.Nil(t, Opaque(KindSink, "egress error", nil))
+}
+
+func TestOpaqueLogValue(t *testing.T) {
+	cause := errors.New("internal: broker kafka-3:9092 timeout")
+	op := Opaque(KindTransport, "transport unavailable", cause)
+	lv, ok := op.(slog.LogValuer)
+	require.True(t, ok)
+	v := lv.LogValue()
+	require.Equal(t, slog.KindGroup, v.Kind())
+	got := map[string]string{}
+	for _, a := range v.Group() {
+		got[a.Key] = a.Value.String()
+	}
+	assert.Equal(t, "transport", got["kind"])
+	assert.Equal(t, "transport unavailable", got["public"])
+	assert.Equal(t, cause.Error(), got["hidden_cause"])
+	assert.Contains(t, got["origin"], "TestOpaqueLogValue")
 }

@@ -29,10 +29,6 @@ type SaramaDriver struct {
 
 var _ Adapter = (*SaramaDriver)(nil)
 
-// newSaramaDriver constructs a fully-initialised SaramaDriver: validates the
-// config, parses the Kafka version, dials the brokers, and joins the
-// consumer group. On any failure after the Sarama client is created, the
-// client is closed before returning.
 func newSaramaDriver(ctx context.Context, cfg Config) (*SaramaDriver, error) {
 	d := &SaramaDriver{}
 	if err := d.init(ctx, cfg); err != nil {
@@ -337,20 +333,20 @@ type saramaSlogAdapter struct {
 	logger *slog.Logger
 }
 
-func (s *saramaSlogAdapter) Print(v ...interface{}) {
+func (s *saramaSlogAdapter) Print(v ...any) {
 	s.logger.Debug("sarama", slog.Any("args", v))
 }
 
-func (s *saramaSlogAdapter) Println(v ...interface{}) {
+func (s *saramaSlogAdapter) Println(v ...any) {
 	s.logger.Debug("sarama", slog.Any("args", v))
 }
 
-func (s *saramaSlogAdapter) Printf(format string, v ...interface{}) {
+func (s *saramaSlogAdapter) Printf(format string, v ...any) {
 	s.logger.Debug("sarama", slog.String("message", fmt.Sprintf(format, v...)))
 }
 
 type saramaNoopLogger struct{}
 
-func (saramaNoopLogger) Print(...interface{})          {}
-func (saramaNoopLogger) Println(...interface{})        {}
-func (saramaNoopLogger) Printf(string, ...interface{}) {}
+func (saramaNoopLogger) Print(...any)          {}
+func (saramaNoopLogger) Println(...any)        {}
+func (saramaNoopLogger) Printf(string, ...any) {}

@@ -25,10 +25,6 @@ import (
 	qerr "quanta/internal/errors"
 )
 
-// ---------------------------------------------------------------------------
-// BackpressureStrategy
-// ---------------------------------------------------------------------------
-
 type BackpressureStrategy struct{ slug string }
 
 var (
@@ -66,10 +62,6 @@ func (v *BackpressureStrategy) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// CheckpointStrategy
-// ---------------------------------------------------------------------------
-
 type CheckpointStrategy struct{ slug string }
 
 var (
@@ -103,10 +95,6 @@ func (v *CheckpointStrategy) UnmarshalText(text []byte) error {
 	*v = parsed
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// CommitStrategyType
-// ---------------------------------------------------------------------------
 
 type CommitStrategyType struct{ slug string }
 

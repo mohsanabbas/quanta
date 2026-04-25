@@ -18,21 +18,15 @@ const (
 	_barrierAborted   int32 = 2
 )
 
-// Barrier controls the lifecycle of a single checkpoint commit decision.
 type Barrier interface {
 	Complete()
 	Abort()
 }
 
-// DLQPublisher is the narrow interface the coordinator needs from a DLQ sink.
-// Any sink.Adapter satisfies this implicitly — no coupling to the sink package.
 type DLQPublisher interface {
 	Publish(ctx context.Context, frame *pb.Frame) error
 }
 
-// AckCoordinator centralized checkpoint lifecycle manager.
-// The coordinator is the ONLY component that commits checkpoints back to
-// the source.
 type AckCoordinator struct {
 	mu       sync.Mutex
 	subs     []func(*pb.ConnectorAck)
@@ -59,14 +53,6 @@ func (c *AckCoordinator) SetDeadLetter(fn DeadLetterFn) {
 	c.mu.Unlock()
 }
 
-// Barrier creates a refcounted completion barrier for a checkpoint.
-// refs is the number of Complete/Ack calls required before commit.
-//
-// If a barrier already exists for this token (source redelivery), the
-// stale barrier is force-aborted and replaced.
-//
-// Nil tokens produce a valid barrier that is not tracked  Complete and
-// Abort are safe but no commit fires.
 func (c *AckCoordinator) Barrier(tok *pb.CheckpointToken, refs int) Barrier {
 	if refs < 0 || refs > math.MaxInt32 {
 		slog.Warn("ackBarrier: refs out of int32 range, clamping", "refs", refs)
@@ -90,9 +76,6 @@ func (c *AckCoordinator) Barrier(tok *pb.CheckpointToken, refs int) Barrier {
 	return b
 }
 
-// Ack is the callback given to AckAware sinks — satisfies sink.EmitFn.
-// The context is forwarded from the sink for OTel trace/metric propagation.
-// Thread-safe. No-op if no barrier exists or token is nil.
 func (c *AckCoordinator) Ack(_ context.Context, tok *pb.CheckpointToken) {
 	key := tokenKey(tok)
 	if key == "" {
@@ -107,9 +90,6 @@ func (c *AckCoordinator) Ack(_ context.Context, tok *pb.CheckpointToken) {
 	b.release()
 }
 
-// CommitNow immediately commits a checkpoint without creating a barrier.
-// Used when all derived frames are dropped/failed and nothing reaches sinks.
-// No-op for nil tokens.
 func (c *AckCoordinator) CommitNow(tok *pb.CheckpointToken) {
 	if tok == nil {
 		return
@@ -117,13 +97,6 @@ func (c *AckCoordinator) CommitNow(tok *pb.CheckpointToken) {
 	c.commit(tok)
 }
 
-// Fail invokes the dead-letter handler for a permanently failed frame.
-// The checkpoint lifecycle is handled by the caller pushFrame:
-//   - All frames fail pushFrame calls CommitNow
-//   - Some frames survive → the surviving barrier commits when sinks ack
-//
-// If the dead-letter callback itself returns an error, the failure is logged
-// at error level. Previously the return value was discarded.
 func (c *AckCoordinator) Fail(stage string, frame *pb.Frame, cause error) {
 	slog.Error("permanent failure, dead-lettering frame",
 		"stage", stage, "error", cause)
@@ -139,7 +112,6 @@ func (c *AckCoordinator) Fail(stage string, frame *pb.Frame, cause error) {
 	}
 }
 
-// Len returns the number of outstanding unresolved barriers.
 func (c *AckCoordinator) Len() int {
 	c.mu.Lock()
 	n := len(c.barriers)
@@ -147,15 +119,12 @@ func (c *AckCoordinator) Len() int {
 	return n
 }
 
-// SetDLQSink configures the dead-letter queue publisher.
-// Thread-safe; replaces any previously set DLQ sink.
 func (c *AckCoordinator) SetDLQSink(s DLQPublisher) {
 	c.mu.Lock()
 	c.dlqSink = s
 	c.mu.Unlock()
 }
 
-// HasDLQ returns whether a DLQ sink is configured.
 func (c *AckCoordinator) HasDLQ() bool {
 	c.mu.Lock()
 	has := c.dlqSink != nil
@@ -163,15 +132,6 @@ func (c *AckCoordinator) HasDLQ() bool {
 	return has
 }
 
-// Nack handles permanent sink delivery failure for a frame.
-//
-// Behaviour:
-//  1. Abort the barrier (no normal commit).
-//  2. If a DLQ sink is configured, publish a DLQ frame.
-//  3. On DLQ success commit checkpoint (source advances).
-//  4. On DLQ failure or no DLQ withhold commit (source redelivers).
-//
-// Thread-safe. No-op for nil frames or nil checkpoints.
 func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error) {
 	if frame == nil {
 		return
@@ -179,7 +139,6 @@ func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error)
 	tok := frame.Checkpoint
 	key := tokenKey(tok)
 
-	// Abort the barrier so the normal ack path cannot commit.
 	if key != "" {
 		c.mu.Lock()
 		if b := c.barriers[key]; b != nil {
@@ -191,7 +150,6 @@ func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error)
 		c.mu.Unlock()
 	}
 
-	// No checkpoint → nothing to commit.
 	if tok == nil {
 		slog.Debug("nack: frame has nil checkpoint, nothing to commit or DLQ",
 			"error", cause)
@@ -218,7 +176,6 @@ func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error)
 	c.commit(tok)
 }
 
-// buildDLQFrame wraps an original frame with error metadata for the DLQ.
 func buildDLQFrame(original *pb.Frame, cause error) *pb.Frame {
 	headers := make(map[string][]byte, len(original.Headers)+2)
 	for k, v := range original.Headers {
@@ -277,8 +234,6 @@ func (b *ackBarrier) Complete() {
 	b.release()
 }
 
-// Abort transitions the barrier to aborted. No commit fires.
-// Safe to call concurrently with release CAS arbitrates.
 func (b *ackBarrier) Abort() {
 	if b.state.CompareAndSwap(_barrierLive, _barrierAborted) {
 		b.coord.removeBarrier(b)

@@ -60,9 +60,7 @@ type grpcErrTransform struct {
 	code      codes.Code
 	callCount int32
 	succeedAt int32
-	// firstCall, when non-nil, is closed exactly once after Transform is
-	// invoked for the first time. Tests use it as a deterministic gate so
-	// they can react to the call without sleeping for an arbitrary duration.
+
 	firstCall chan struct{}
 }
 
@@ -103,10 +101,6 @@ func (c *captureSink) Publish(_ context.Context, f *pb.Frame) error {
 }
 func (c *captureSink) Close(context.Context) error { return nil }
 
-// captureFor returns a captureSink wired to the runner's coordinator. Tests
-// previously relied on AddSink to bind the ack callback; now that sinks are
-// constructed via factories with BuildOptions, fixtures inject the callback
-// directly.
 func captureFor(coord *AckCoordinator) *captureSink {
 	return &captureSink{ackFn: coord.Ack}
 }
@@ -496,7 +490,7 @@ func TestCallTransform_ContextCancelled_AbortsImmediately(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		cancelOnFirst bool // true => cancel after the first Transform call returns; false => pre-cancel
+		cancelOnFirst bool
 		retries       int
 		wantCalls     int32
 	}{
@@ -524,8 +518,7 @@ func TestCallTransform_ContextCancelled_AbortsImmediately(t *testing.T) {
 			cli := &grpcErrTransform{code: codes.Unavailable}
 
 			if tt.cancelOnFirst {
-				// Deterministic gate: cancel only after the fake transform has
-				// recorded its first invocation. No wall-clock sleep needed.
+
 				cli.firstCall = make(chan struct{})
 				go func() {
 					<-cli.firstCall
@@ -778,10 +771,6 @@ func TestRunner_Close_ErrorAggregation(t *testing.T) {
 func TestRunner_BackoffOrCancel(t *testing.T) {
 	t.Parallel()
 
-	// backoffOrCancel either returns true after duration elapses, or false
-	// immediately when ctx is done. Tests cover both branches deterministically:
-	//   - completes_normally:    short duration, ctx never cancelled
-	//   - already_cancelled:     ctx cancelled before the call (no sleeps)
 	tests := []struct {
 		name       string
 		duration   time.Duration
@@ -811,11 +800,6 @@ func TestRunner_BackoffOrCancel(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Phase 2 — NackAware binding + DLQ wiring in Runner
-// ---------------------------------------------------------------------------
-
-// nackCaptureSink advertises both ack and nack capabilities.
 type nackCaptureSink struct {
 	mu         sync.Mutex
 	pushed     []*pb.Frame
@@ -845,7 +829,6 @@ func (s *nackCaptureSink) Close(context.Context) error { return nil }
 
 var _ sink.Adapter = (*nackCaptureSink)(nil)
 
-// nackCaptureFor returns a fixture wired to the runner's coordinator.
 func nackCaptureFor(coord *AckCoordinator) *nackCaptureSink {
 	return &nackCaptureSink{ackFn: coord.Ack, nackFn: coord.Nack}
 }
@@ -895,7 +878,6 @@ func TestPublishAll_SyncSinkFail_NacksWithDLQ(t *testing.T) {
 	r := newTestRunner()
 	r.AddTransformer("pass", &fakeTransform{mode: "ok"}, 100*time.Millisecond, 0, 0, nil)
 
-	// Sync sink that fails every publish.
 	errSink := &publishErrSink{err: errors.New("broker down")}
 	r.AddSink(errSink)
 
@@ -906,8 +888,7 @@ func TestPublishAll_SyncSinkFail_NacksWithDLQ(t *testing.T) {
 	r.coord.Subscribe(ac.handler)
 
 	err := r.pushFrame(context.Background(), makeFrame())
-	// With DLQ configured, sync publish failure should nack → DLQ → commit.
-	// pushFrame returns nil (frame handled via DLQ path).
+
 	if err != nil {
 		t.Fatalf("pushFrame with DLQ should not return error: %v", err)
 	}
@@ -928,13 +909,12 @@ func TestPublishAll_SyncSinkFail_NoDLQ_ReturnsError(t *testing.T) {
 
 	errSink := &publishErrSink{err: errors.New("broker down")}
 	r.AddSink(errSink)
-	// No DLQ configured
 
 	ac := &ackCounter{}
 	r.coord.Subscribe(ac.handler)
 
 	err := r.pushFrame(context.Background(), makeFrame())
-	// Without DLQ, sync publish failure returns error (current behavior).
+
 	if err == nil {
 		t.Fatal("pushFrame without DLQ should return error on sync sink failure")
 	}
@@ -943,7 +923,6 @@ func TestPublishAll_SyncSinkFail_NoDLQ_ReturnsError(t *testing.T) {
 	}
 }
 
-// publishErrSink is a sync sink that fails Publish with a given error.
 type publishErrSink struct {
 	err error
 }
@@ -953,8 +932,6 @@ func (s *publishErrSink) Caps() sink.Capabilities                      { return 
 func (s *publishErrSink) Publish(_ context.Context, _ *pb.Frame) error { return s.err }
 func (s *publishErrSink) Close(context.Context) error                  { return nil }
 
-// fakeDLQAdapter satisfies both DLQPublisher (for coordinator) and sink.Adapter
-// (for Runner lifecycle). Captures published frames for assertion.
 type fakeDLQAdapter struct {
 	published *pb.Frame
 	closed    bool
@@ -972,7 +949,6 @@ func (d *fakeDLQAdapter) Close(context.Context) error {
 	return nil
 }
 
-// errorEventsTransform returns error_events in the response alongside normal events.
 type errorEventsTransform struct {
 	fakeTransform
 }
@@ -1027,13 +1003,12 @@ func TestRunStage_ErrorEventsNoSink_WarnsAndDrops(t *testing.T) {
 	t.Parallel()
 
 	r := newTestRunner()
-	// No error sink configured (nil)
+
 	r.AddTransformer("ce-norm", &errorEventsTransform{}, 100*time.Millisecond, 0, 0, nil)
 
 	outSink := captureFor(r.coord)
 	r.AddSink(outSink)
 
-	// Should not panic or error — just warn and drop error_events
 	if err := r.pushFrame(context.Background(), makeFrame()); err != nil {
 		t.Fatalf("pushFrame: %v", err)
 	}
@@ -1046,7 +1021,6 @@ func TestRunStage_ErrorEventsNoSink_WarnsAndDrops(t *testing.T) {
 	}
 }
 
-// errorEventsOnlyTransform returns only error_events, no normal events.
 type errorEventsOnlyTransform struct {
 	fakeTransform
 }
@@ -1155,8 +1129,7 @@ func TestRunner_Start_RejectsSecondCall(t *testing.T) {
 	r.SetSource(&fakeSource{block: true})
 	r.AddSink(captureFor(r.coord))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("first Start: unexpected error: %v", err)
@@ -1181,8 +1154,7 @@ func TestRunner_Start_ConcurrentCallsExactlyOneWins(t *testing.T) {
 	r.SetSource(&fakeSource{block: true})
 	r.AddSink(captureFor(r.coord))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	const goroutines = 16
 	var wg sync.WaitGroup

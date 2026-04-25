@@ -279,10 +279,6 @@ func TestDriverUploadError_WithholdsAck(t *testing.T) {
 	assert.Equal(t, int32(0), acked.Load(), "ack must be withheld on upload failure")
 }
 
-// ---------------------------------------------------------------------------
-// NackAware tests
-// ---------------------------------------------------------------------------
-
 type nackRecord struct {
 	frame *pb.Frame
 	err   error
@@ -291,11 +287,11 @@ type nackRecord struct {
 func TestDriverNack(t *testing.T) {
 	tests := []struct {
 		name       string
-		giveErr    error // S3 PutObject error (nil = success)
-		encFail    bool  // force encoder failure
+		giveErr    error
+		encFail    bool
 		wantNacks  int
 		wantAcks   int
-		wantFrames bool // verify nacked frames match published
+		wantFrames bool
 	}{
 		{
 			name:       "upload failure nacks all frames in batch",
@@ -348,8 +344,8 @@ func TestDriverNack(t *testing.T) {
 			frames := make([]*pb.Frame, 3)
 			for i := range frames {
 				frames[i] = &pb.Frame{
-					Key:   []byte(fmt.Sprintf("key-%d", i)),
-					Value: []byte(fmt.Sprintf(`{"i":%d}`, i)),
+					Key:   fmt.Appendf(nil, "key-%d", i),
+					Value: fmt.Appendf(nil, `{"i":%d}`, i),
 					Checkpoint: &pb.CheckpointToken{Kind: &pb.CheckpointToken_Kafka{
 						Kafka: &pb.KafkaOffset{Topic: "t", Partition: 0, Offset: int64(i)},
 					}},
@@ -357,7 +353,6 @@ func TestDriverNack(t *testing.T) {
 				require.NoError(t, d.Publish(ctx, frames[i]))
 			}
 
-			// Wait for flush to complete (either ack or nack path).
 			require.Eventually(t, func() bool {
 				nackMu.Lock()
 				n := len(nacks)
@@ -383,7 +378,6 @@ func TestDriverNack(t *testing.T) {
 	}
 }
 
-// failEncoder always returns an error on Encode.
 type failEncoder struct{}
 
 func (f *failEncoder) Encode(_ [][]byte) ([]byte, error) {

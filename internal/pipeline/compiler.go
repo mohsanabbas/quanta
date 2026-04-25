@@ -116,8 +116,6 @@ func compileDLQ(ctx context.Context, cfg config.PipelineConfig, r *Runner) error
 	return nil
 }
 
-// buildSink resolves a sink driver, decodes its raw config, and constructs
-// the adapter with ack/nack callbacks bound to the runner's coordinator.
 func buildSink(ctx context.Context, r *Runner, name string, raw any) (sink.Adapter, error) {
 	opts := sink.BuildOptions{
 		Ack:  r.coord.Ack,
@@ -126,9 +124,6 @@ func buildSink(ctx context.Context, r *Runner, name string, raw any) (sink.Adapt
 	return sink.Build(ctx, name, normalizeRawConfig(raw), opts)
 }
 
-// normalizeRawConfig collapses a typed-nil *yaml.Node into an untyped nil so
-// downstream DecodeConfig implementations can uniformly treat "no config" the
-// same regardless of whether the YAML key was absent or explicitly null.
 func normalizeRawConfig(raw any) any {
 	if node, ok := raw.(*yaml.Node); ok && node == nil {
 		return nil

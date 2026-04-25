@@ -48,7 +48,6 @@ type TransformerConfig struct {
 	ErrorSink   *ErrorSinkConfig  `yaml:"error_sink,omitempty"`
 }
 
-// ErrorSinkConfig configures a per-transformer error sink for plugin-rejected events.
 type ErrorSinkConfig struct {
 	Sink   string  `yaml:"sink"`
 	Config RawYAML `yaml:"config"`
@@ -68,7 +67,6 @@ type DebugConfig struct {
 	ValueMaxBytes   int  `yaml:"value_max_bytes"`
 }
 
-// DLQConfig configures the engine-managed dead-letter queue.
 type DLQConfig struct {
 	Enabled                bool    `yaml:"enabled"`
 	Sink                   string  `yaml:"sink"`

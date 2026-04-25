@@ -228,7 +228,7 @@ func TestAckCoordinator_ConcurrentRelease(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			coord.Ack(context.Background(), tok)
@@ -327,7 +327,7 @@ func TestAckCoordinator_NilToken(t *testing.T) {
 		t.Parallel()
 		coord := NewAckCoordinator()
 		b := coord.Barrier(nil, 1)
-		b.Abort() // must not panic
+		b.Abort()
 	})
 
 	t.Run("ack_noop", func(t *testing.T) {
@@ -336,7 +336,7 @@ func TestAckCoordinator_NilToken(t *testing.T) {
 		coord := NewAckCoordinator()
 		coord.Subscribe(ac.handler)
 
-		coord.Ack(context.Background(), nil) // must not panic
+		coord.Ack(context.Background(), nil)
 		if got := ac.get(); got != 0 {
 			t.Fatalf("nil ack must be noop: got %d", got)
 		}
@@ -348,7 +348,7 @@ func TestAckCoordinator_NilToken(t *testing.T) {
 		coord := NewAckCoordinator()
 		coord.Subscribe(ac.handler)
 
-		coord.CommitNow(nil) // must not commit
+		coord.CommitNow(nil)
 		if got := ac.get(); got != 0 {
 			t.Fatalf("nil CommitNow must be noop: got %d", got)
 		}
@@ -365,10 +365,9 @@ func TestAckBarrier_AbortThenRelease(t *testing.T) {
 	tok := kafkaTok("t", 0, 1100)
 	b := coord.Barrier(tok, 2)
 
-	// Simulate one sink acks, then runner aborts due to another sink failure.
-	b.Complete() // refs -> 1
-	b.Abort()    // state aborted, barrier removed from map
-	b.Complete() // refs -> 0, but state is aborted -> CAS fails -> no commit
+	b.Complete()
+	b.Abort()
+	b.Complete()
 
 	if got := ac.get(); got != 0 {
 		t.Fatalf("aborted barrier must not commit: got %d", got)

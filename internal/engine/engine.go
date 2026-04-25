@@ -21,12 +21,10 @@ const _shutdownGrace = 10 * time.Second
 func (e *Engine) Run(ctx context.Context) error {
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Worker: watch for source failure or context cancellation.
 	g.Go(func() error {
 		return e.watchLifecycle(gCtx)
 	})
 
-	// Worker: serve gRPC transport.
 	g.Go(func() error {
 		return e.transport.Serve()
 	})

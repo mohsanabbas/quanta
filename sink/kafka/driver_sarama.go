@@ -41,9 +41,6 @@ func (s *saramaSink) Caps() sink.Capabilities {
 	return sink.Capabilities{AckAware: true, NackAware: true}
 }
 
-// newSaramaSink is the production factory: validates the config, builds the
-// Sarama AsyncProducer, and starts the ack-loop goroutine. Any failure after
-// producer creation closes the producer before returning.
 func newSaramaSink(ctx context.Context, cfg Config, opts sink.BuildOptions) (sink.Adapter, error) {
 	if err := cfg.validateAndDefault(); err != nil {
 		return nil, err
@@ -59,9 +56,6 @@ func newSaramaSink(ctx context.Context, cfg Config, opts sink.BuildOptions) (sin
 	return newSaramaSinkWithProducer(ctx, cfg, prod, opts), nil
 }
 
-// newSaramaSinkWithProducer wires an already-constructed producer into the
-// sink and starts the ack-loop. Used by tests with a fake producer; production
-// callers should use newSaramaSink.
 func newSaramaSinkWithProducer(ctx context.Context, cfg Config, prod sarama.AsyncProducer, opts sink.BuildOptions) *saramaSink {
 	s := &saramaSink{
 		cfg:    cfg,

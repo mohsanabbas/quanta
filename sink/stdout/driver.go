@@ -12,7 +12,6 @@ import (
 	"quanta/sink"
 )
 
-// Config controls how frames are printed and acknowledged.
 type Config struct {
 	DelayMS       int  `yaml:"delay_ms"`
 	PrintCounter  bool `yaml:"print_counter"`
@@ -61,10 +60,7 @@ func (d *stdoutDriver) Publish(ctx context.Context, f *pb.Frame) error {
 			attrs = append(attrs, "topic", k.Topic, "partition", k.Partition, "offset", k.Offset)
 		}
 		if d.cfg.PrintValue && len(f.Value) > 0 {
-			maxBytes := d.cfg.ValueMaxBytes
-			if maxBytes > len(f.Value) {
-				maxBytes = len(f.Value)
-			}
+			maxBytes := min(d.cfg.ValueMaxBytes, len(f.Value))
 			attrs = append(attrs, "value", string(f.Value[:maxBytes]))
 		}
 		logging.L().Info("sink stdout", attrs...)

@@ -15,27 +15,16 @@ import (
 	qerr "quanta/internal/errors"
 )
 
-// EmitFunc is the callback the engine passes to a running source. The source
-// invokes it once per delivered frame; a non-nil return signals that the
-// runner has rejected the frame (engine-shutdown or pipeline error).
 type EmitFunc func(context.Context, *pb.Frame) error
 
-// Adapter is the interface every source driver implements.
 type Adapter interface {
-	// Run blocks until ctx is cancelled or the source terminates fatally.
 	Run(ctx context.Context, emit EmitFunc) error
-	// OnAck is invoked by the runner when a checkpoint barrier completes.
-	// Sources translate the ack into source-specific commit semantics.
+
 	OnAck(ack *pb.ConnectorAck)
-	// Close drains in-flight work and releases resources.
+
 	Close(ctx context.Context) error
 }
 
-// Registration declares a source driver to the registry.
-//
-// LoadConfig reads and decodes a config file; New constructs and fully
-// initialises an Adapter using that config. On failure, New must release any
-// partially acquired resources.
 type Registration struct {
 	Name       string
 	LoadConfig func(path string) (any, error)
@@ -47,8 +36,6 @@ var (
 	_registry   = map[string]Registration{}
 )
 
-// Register adds a driver to the registry. Panics on missing fields — sources
-// register from init() and a missing field is always a programmer error.
 func Register(r Registration) {
 	if r.Name == "" {
 		panic("source: registration missing name")
@@ -64,7 +51,6 @@ func Register(r Registration) {
 	_registryMu.Unlock()
 }
 
-// Lookup returns the Registration for name, or false if not registered.
 func Lookup(name string) (Registration, bool) {
 	_registryMu.RLock()
 	reg, ok := _registry[name]
@@ -72,7 +58,6 @@ func Lookup(name string) (Registration, bool) {
 	return reg, ok
 }
 
-// LoadConfig resolves the driver and reads its config from path.
 func LoadConfig(name, path string) (any, error) {
 	reg, ok := Lookup(name)
 	if !ok {
@@ -81,7 +66,6 @@ func LoadConfig(name, path string) (any, error) {
 	return reg.LoadConfig(path)
 }
 
-// Build resolves the driver and constructs the adapter.
 func Build(ctx context.Context, name string, cfg any) (Adapter, error) {
 	reg, ok := Lookup(name)
 	if !ok {

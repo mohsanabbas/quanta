@@ -31,13 +31,6 @@ const (
 	outcomeAbort
 )
 
-// DeadLetterFn handles permanently-failed frames once the engine gives up
-// on retries / DLQ delivery. Implementations should be best-effort and
-// idempotent.
-//
-// Returning a non-nil error signals that the dead-letter handler itself
-// failed (e.g., a custom external store write errored). The coordinator
-// logs these failures rather than silently discarding them.
 type DeadLetterFn func(stage string, frame *pb.Frame, cause error) error
 
 type Runner struct {
@@ -52,8 +45,6 @@ type Runner struct {
 
 	sourceErr chan error
 
-	// started flips from false to true exactly once via CAS in Start. A
-	// second Start call is a programmer error and is rejected immediately.
 	started atomic.Bool
 }
 
@@ -113,8 +104,6 @@ func (r *Runner) SubscribeAck(fn func(*pb.ConnectorAck)) {
 	r.coord.Subscribe(fn)
 }
 
-// Validate inspects the assembled pipeline and reports configuration errors
-// that would otherwise surface only at Start. Safe to call multiple times.
 func (r *Runner) Validate() error {
 	if r.source == nil {
 		return qerr.Pipeline("validate", errors.New("no source configured"))
@@ -220,9 +209,9 @@ func (r *Runner) runStage(ctx context.Context, st transformStage, in []*pb.Frame
 		case outcomeEvents:
 			out = append(out, toFrames(f, events)...)
 		case outcomeDrop, outcomeFailed:
-			// no-op: filtered or dead-lettered
+
 		case outcomeAbort:
-			// context cancelled: stop processing remaining frames in this stage
+
 			if len(errEvents) > 0 {
 				r.publishErrorEvents(ctx, st, f, errEvents)
 			}

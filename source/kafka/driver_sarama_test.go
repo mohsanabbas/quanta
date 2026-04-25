@@ -169,19 +169,19 @@ func TestPartitionTracker_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(workers * 2)
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(base int) {
 			defer wg.Done()
-			for i := 0; i < opsPerWorker; i++ {
+			for i := range opsPerWorker {
 				tracker.Reserve(int64(base*opsPerWorker + i))
 			}
 		}(w)
 	}
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(base int) {
 			defer wg.Done()
-			for i := 0; i < opsPerWorker; i++ {
+			for i := range opsPerWorker {
 				tracker.AckOffset(int64(base*opsPerWorker + i))
 			}
 		}(w)

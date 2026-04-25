@@ -235,7 +235,6 @@ func TestSaramaSink_AckLoopDrainsAllInFlight(t *testing.T) {
 	fp.AsyncClose()
 	<-s.doneCh
 
-	// Only successes (i=0,2,4) get acked; errors are withheld.
 	assert.Equal(t, int32(3), acked.Load())
 }
 

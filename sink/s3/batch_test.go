@@ -104,14 +104,12 @@ func TestBatchPoolConcurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			b := pool.Get().(*batch)
 			b.append([]byte("data"), &pb.CheckpointToken{}, nil)
 			b.reset()
 			pool.Put(b)
-		}()
+		})
 	}
 	wg.Wait()
 }
