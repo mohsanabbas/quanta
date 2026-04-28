@@ -25,6 +25,9 @@ type SaramaDriver struct {
 
 	baseAttrs  []slog.Attr
 	partitions sync.Map
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 var _ Adapter = (*SaramaDriver)(nil)
@@ -142,19 +145,25 @@ func (d *SaramaDriver) Run(ctx context.Context, emit EmitFunc) error {
 }
 
 func (d *SaramaDriver) Close(ctx context.Context) error {
-	log := d.loggerWithContext(ctx, slog.String("stage", "close"))
-	if d.group != nil {
-		if err := d.group.Close(); err != nil {
-			log.Error("failed to close consumer group", slog.String("error", err.Error()))
+	d.closeOnce.Do(func() {
+		log := d.loggerWithContext(ctx, slog.String("stage", "close"))
+		if d.group != nil {
+			if err := d.group.Close(); err != nil {
+				log.Error("failed to close consumer group", slog.String("error", err.Error()))
+				d.closeErr = err
+			}
 		}
-	}
-	if d.cl != nil {
-		if err := d.cl.Close(); err != nil {
-			log.Error("failed to close client", slog.String("error", err.Error()))
+		if d.cl != nil {
+			if err := d.cl.Close(); err != nil {
+				log.Error("failed to close client", slog.String("error", err.Error()))
+				if d.closeErr == nil {
+					d.closeErr = err
+				}
+			}
 		}
-	}
-	log.Info("kafka source driver closed")
-	return nil
+		log.Info("kafka source driver closed")
+	})
+	return d.closeErr
 }
 
 func (d *SaramaDriver) OnAck(ack *pb.ConnectorAck) {

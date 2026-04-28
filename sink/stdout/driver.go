@@ -47,9 +47,11 @@ func (d *stdoutDriver) Caps() sink.Capabilities {
 func (d *stdoutDriver) Publish(ctx context.Context, f *pb.Frame) error {
 	if d.cfg.DelayMS > 0 {
 		delay := time.Duration(d.cfg.DelayMS) * time.Millisecond
+		timer := time.NewTimer(delay)
 		select {
-		case <-time.After(delay):
+		case <-timer.C:
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
 		}
 	}

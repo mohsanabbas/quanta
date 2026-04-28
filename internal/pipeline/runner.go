@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,9 +44,12 @@ type Runner struct {
 	ackAwareSinks int
 	dlqSink       sink.Adapter
 
-	sourceErr chan error
+	sourceErr  chan error
+	sourceDone chan struct{}
 
-	started atomic.Bool
+	started   atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 type transformStage struct {
@@ -62,10 +66,11 @@ func NewRunner(coord *AckCoordinator) *Runner {
 		coord = NewAckCoordinator()
 	}
 	return &Runner{
-		stages:    make([]transformStage, 0, 4),
-		sinks:     make([]sink.Adapter, 0, 2),
-		sourceErr: make(chan error, 1),
-		coord:     coord,
+		stages:     make([]transformStage, 0, 4),
+		sinks:      make([]sink.Adapter, 0, 2),
+		sourceErr:  make(chan error, 1),
+		sourceDone: make(chan struct{}),
+		coord:      coord,
 	}
 }
 
@@ -121,19 +126,23 @@ func (r *Runner) Start(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return qerr.Pipeline("start", errors.New("runner already started"))
 	}
-	go func() {
-		err := r.source.Run(ctx, func(runCtx context.Context, frame *pb.Frame) error {
-			return r.pushFrame(runCtx, frame)
-		})
-		if err != nil && ctx.Err() == nil {
-			select {
-			case r.sourceErr <- qerr.Pipeline("source-run", err):
-			default:
-				slog.Warn("engine: dropping source error; no receiver", "error", err)
-			}
-		}
-	}()
+	go r.runSource(ctx)
 	return nil
+}
+
+func (r *Runner) runSource(ctx context.Context) {
+	defer close(r.sourceDone)
+	err := r.source.Run(ctx, func(runCtx context.Context, frame *pb.Frame) error {
+		return r.pushFrame(runCtx, frame)
+	})
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	select {
+	case r.sourceErr <- qerr.Pipeline("source-run", err):
+	default:
+		slog.Warn("engine: dropping source error; no receiver", "error", err)
+	}
 }
 
 func (r *Runner) SourceErr() <-chan error {
@@ -141,7 +150,18 @@ func (r *Runner) SourceErr() <-chan error {
 }
 
 func (r *Runner) Close(ctx context.Context) error {
+	r.closeOnce.Do(func() {
+		r.closeErr = r.shutdown(ctx)
+	})
+	return r.closeErr
+}
+
+func (r *Runner) shutdown(ctx context.Context) error {
 	var errs []error
+
+	if err := r.stopSource(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	for _, st := range r.stages {
 		if err := st.client.Close(); err != nil {
 			errs = append(errs, qerr.Transform(st.name, "close", err))
@@ -163,6 +183,22 @@ func (r *Runner) Close(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (r *Runner) stopSource(ctx context.Context) error {
+	if r.source == nil {
+		return nil
+	}
+	closeErr := r.source.Close(ctx)
+	if !r.started.Load() {
+		return closeErr
+	}
+	select {
+	case <-r.sourceDone:
+		return closeErr
+	case <-ctx.Done():
+		return errors.Join(closeErr, ctx.Err())
+	}
 }
 
 func (r *Runner) pushFrame(ctx context.Context, f *pb.Frame) error {
@@ -233,9 +269,15 @@ func (r *Runner) callTransform(ctx context.Context, st transformStage, f *pb.Fra
 			return outcomeAbort, nil, nil
 		}
 
-		callCtx, cancel := r.stageContext(ctx, st.timeout)
-		resp, err := st.client.Transform(callCtx, req)
-		cancel()
+		var (
+			resp *pb.TransformResponse
+			err  error
+		)
+		func() {
+			callCtx, cancel := r.stageContext(ctx, st.timeout)
+			defer cancel()
+			resp, err = st.client.Transform(callCtx, req)
+		}()
 
 		if err != nil {
 			outcome, retry := r.handleTransportError(ctx, st, f, err, try)

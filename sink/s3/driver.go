@@ -39,12 +39,14 @@ type s3Driver struct {
 	nack    sink.NackFn
 	pool    *sync.Pool
 
-	mu      sync.Mutex
-	current *batch
-	sealCh  chan *batch
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-	cancel  context.CancelFunc
+	mu           sync.Mutex
+	current      *batch
+	closing      bool           // set under mu before close(stopCh) so Publish rejects new frames
+	sealInflight sync.WaitGroup // counts sealed batches in-flight to sealCh; held across the send
+	sealCh       chan *batch
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	doneCh       chan struct{}
 }
 
 var _ sink.Adapter = (*s3Driver)(nil)
@@ -90,34 +92,76 @@ func newDriverWithClient(ctx context.Context, cfg Config, client Client, enc Enc
 		sealCh:  make(chan *batch, 1),
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
-		cancel:  cancel,
 	}
-	go d.flushLoop(flushCtx)
+	// flushLoop owns flushCtx; cancel runs when the goroutine exits so the
+	// detached context never outlives the goroutine that uses it.
+	go func() {
+		defer cancel()
+		d.flushLoop(flushCtx)
+	}()
 	return d
 }
 
-func (d *s3Driver) Publish(_ context.Context, f *pb.Frame) error {
+func (d *s3Driver) Publish(ctx context.Context, f *pb.Frame) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.current.append(f.Value, f.Checkpoint, f)
-
-	if d.current.full() {
-		sealed := d.current
-		d.current = d.pool.Get().(*batch)
-		d.sealCh <- sealed
+	if d.closing {
+		d.mu.Unlock()
+		return errors.New("s3 sink: closed")
 	}
-	return nil
+	d.current.append(f.Value, f.Checkpoint, f)
+	var sealed *batch
+	if d.current.full() {
+		sealed = d.current
+		d.current = d.pool.Get().(*batch)
+		// Increment under d.mu so Close cannot observe sealInflight==0
+		// after setting closing=true while a sealed batch is still in flight.
+		d.sealInflight.Add(1)
+	}
+	d.mu.Unlock()
+
+	if sealed == nil {
+		return nil
+	}
+	defer d.sealInflight.Done()
+	// Send outside d.mu so a full sealCh (cap 1) cannot block while holding
+	// the lock. Close waits on sealInflight before closing stopCh, so the
+	// flushLoop is guaranteed to be reading sealCh until this send completes
+	// (or the caller's ctx cancels).
+	select {
+	case d.sealCh <- sealed:
+		return nil
+	case <-ctx.Done():
+		d.recycleBatch(sealed)
+		return ctx.Err()
+	}
 }
 
 func (d *s3Driver) Close(ctx context.Context) error {
-	close(d.stopCh)
+	d.mu.Lock()
+	if d.closing {
+		d.mu.Unlock()
+	} else {
+		d.closing = true
+		d.mu.Unlock()
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		d.sealInflight.Wait()
+	}()
+	select {
+	case <-waitDone:
+	case <-ctx.Done():
+	}
+
+	d.stopOnce.Do(func() {
+		close(d.stopCh)
+	})
 	select {
 	case <-d.doneCh:
-		d.cancel()
 		return nil
 	case <-ctx.Done():
-		d.cancel()
 		return ctx.Err()
 	}
 }
@@ -164,6 +208,10 @@ func (d *s3Driver) flushLoop(ctx context.Context) {
 	for {
 		select {
 		case <-d.stopCh:
+			d.drainSealed(ctx)
+			d.flushPartial(ctx)
+			return
+		case <-ctx.Done():
 			d.drainSealed(ctx)
 			d.flushPartial(ctx)
 			return

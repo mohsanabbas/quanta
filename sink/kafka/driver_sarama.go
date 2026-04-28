@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	pb "quanta/api/proto/v1"
@@ -22,12 +23,19 @@ import (
 )
 
 type saramaSink struct {
-	cfg    Config
-	prod   sarama.AsyncProducer
-	ack    sink.EmitFn
-	nack   sink.NackFn
-	doneCh chan struct{}
+	cfg       Config
+	prod      sarama.AsyncProducer
+	ack       sink.EmitFn
+	nack      sink.NackFn
+	doneCh    chan struct{}
+	ackCancel context.CancelFunc // cancels ackLoop's ctx; used as last-resort during Close
+	closeOnce sync.Once
 }
+
+// _ackDrainGrace bounds how long Close waits after the caller's ctx expires
+// before cancelling ackLoop's own context. This protects against a hung sarama
+// producer that never closes its Successes/Errors channels.
+const _ackDrainGrace = 5 * time.Second
 
 var _ sink.Adapter = (*saramaSink)(nil)
 
@@ -57,14 +65,16 @@ func newSaramaSink(ctx context.Context, cfg Config, opts sink.BuildOptions) (sin
 }
 
 func newSaramaSinkWithProducer(ctx context.Context, cfg Config, prod sarama.AsyncProducer, opts sink.BuildOptions) *saramaSink {
+	ackCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &saramaSink{
-		cfg:    cfg,
-		prod:   prod,
-		ack:    opts.Ack,
-		nack:   opts.Nack,
-		doneCh: make(chan struct{}),
+		cfg:       cfg,
+		prod:      prod,
+		ack:       opts.Ack,
+		nack:      opts.Nack,
+		doneCh:    make(chan struct{}),
+		ackCancel: cancel,
 	}
-	go s.ackLoop(context.WithoutCancel(ctx))
+	go s.ackLoop(ackCtx)
 	return s
 }
 
@@ -157,19 +167,59 @@ func (s *saramaSink) Publish(ctx context.Context, f *pb.Frame) error {
 	}
 }
 
-func (s *saramaSink) Close(_ context.Context) error {
-	if s.prod != nil {
-		s.prod.AsyncClose()
-		<-s.doneCh
-		s.prod = nil
+func (s *saramaSink) Close(ctx context.Context) error {
+	var firstCall bool
+	s.closeOnce.Do(func() {
+		firstCall = true
+		if s.prod != nil {
+			s.prod.AsyncClose()
+		}
+	})
+	if !firstCall {
+		// Subsequent callers just wait for the original drain.
+		select {
+		case <-s.doneCh:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return nil
+	if s.prod == nil {
+		return nil
+	}
+	select {
+	case <-s.doneCh:
+		s.prod = nil
+		return nil
+	case <-ctx.Done():
+		// Caller's deadline expired. Give sarama a short grace period to drain;
+		// if it still hasn't closed Successes/Errors, cancel ackLoop's ctx so
+		// the goroutine can exit instead of leaking forever.
+		grace := time.NewTimer(_ackDrainGrace)
+		defer grace.Stop()
+		select {
+		case <-s.doneCh:
+			s.prod = nil
+			return ctx.Err()
+		case <-grace.C:
+			slog.Warn("kafka-sink: ackLoop drain exceeded grace; cancelling ackLoop")
+			s.ackCancel()
+			<-s.doneCh
+			s.prod = nil
+			return ctx.Err()
+		}
+	}
 }
 
 func (s *saramaSink) ackLoop(ctx context.Context) {
 	defer close(s.doneCh)
 	for {
 		select {
+		case <-ctx.Done():
+			// Forced shutdown: drain anything immediately available, then exit.
+			s.flushSuccesses(ctx)
+			s.flushErrors(ctx)
+			return
 		case pm, ok := <-s.prod.Successes():
 			if !ok {
 				s.flushErrors(ctx)

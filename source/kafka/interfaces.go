@@ -15,7 +15,7 @@ type BackpressureManager interface {
 }
 
 type CheckpointManager interface {
-	Track(offset int64, size int64) error
+	Track(ctx context.Context, offset int64, size int64) error
 
 	Ack(offset int64) (AckHandle, int64, bool)
 

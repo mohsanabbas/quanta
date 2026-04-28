@@ -43,14 +43,14 @@ func NewAckCoordinator() *AckCoordinator {
 
 func (c *AckCoordinator) Subscribe(fn func(*pb.ConnectorAck)) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.subs = append(c.subs, fn)
-	c.mu.Unlock()
 }
 
 func (c *AckCoordinator) SetDeadLetter(fn DeadLetterFn) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.dlFn = fn
-	c.mu.Unlock()
 }
 
 func (c *AckCoordinator) Barrier(tok *pb.CheckpointToken, refs int) Barrier {
@@ -67,12 +67,12 @@ func (c *AckCoordinator) Barrier(tok *pb.CheckpointToken, refs int) Barrier {
 	}
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if old, exists := c.barriers[key]; exists {
 		slog.Warn("ackBarrier: duplicate key, aborting stale barrier", "key", key)
 		old.state.CompareAndSwap(_barrierLive, _barrierAborted)
 	}
 	c.barriers[key] = b
-	c.mu.Unlock()
 	return b
 }
 
@@ -114,22 +114,20 @@ func (c *AckCoordinator) Fail(stage string, frame *pb.Frame, cause error) {
 
 func (c *AckCoordinator) Len() int {
 	c.mu.Lock()
-	n := len(c.barriers)
-	c.mu.Unlock()
-	return n
+	defer c.mu.Unlock()
+	return len(c.barriers)
 }
 
 func (c *AckCoordinator) SetDLQSink(s DLQPublisher) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.dlqSink = s
-	c.mu.Unlock()
 }
 
 func (c *AckCoordinator) HasDLQ() bool {
 	c.mu.Lock()
-	has := c.dlqSink != nil
-	c.mu.Unlock()
-	return has
+	defer c.mu.Unlock()
+	return c.dlqSink != nil
 }
 
 func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error) {
@@ -140,14 +138,16 @@ func (c *AckCoordinator) Nack(ctx context.Context, frame *pb.Frame, cause error)
 	key := tokenKey(tok)
 
 	if key != "" {
-		c.mu.Lock()
-		if b := c.barriers[key]; b != nil {
-			b.state.CompareAndSwap(_barrierLive, _barrierAborted)
-			if c.barriers[key] == b {
-				delete(c.barriers, key)
+		func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if b := c.barriers[key]; b != nil {
+				b.state.CompareAndSwap(_barrierLive, _barrierAborted)
+				if c.barriers[key] == b {
+					delete(c.barriers, key)
+				}
 			}
-		}
-		c.mu.Unlock()
+		}()
 	}
 
 	if tok == nil {
@@ -215,10 +215,10 @@ func (c *AckCoordinator) removeBarrier(b *ackBarrier) {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.barriers[key] == b {
 		delete(c.barriers, key)
 	}
-	c.mu.Unlock()
 }
 
 var _ Barrier = (*ackBarrier)(nil)

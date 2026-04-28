@@ -19,8 +19,9 @@ type partitionProcessor struct {
 	commitStrategy  CommitStrategy
 	logger          *slog.Logger
 
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 func newPartitionProcessor(
@@ -98,7 +99,7 @@ func (pp *partitionProcessor) ProcessMessage(sess sarama.ConsumerGroupSession, m
 		return err
 	}
 
-	if err := pp.checkpointMgr.Track(msg.Offset, size); err != nil {
+	if err := pp.checkpointMgr.Track(sess.Context(), msg.Offset, size); err != nil {
 		pp.backpressureMgr.Release(size)
 		if errors.Is(err, ErrCheckpointClosed) {
 			if ctxErr := sess.Context().Err(); ctxErr != nil {
@@ -152,7 +153,9 @@ func (pp *partitionProcessor) OnAck(offsetHandle AckHandle) {
 }
 
 func (pp *partitionProcessor) Shutdown() {
-	close(pp.stopCh)
+	pp.stopOnce.Do(func() {
+		close(pp.stopCh)
+	})
 	pp.wg.Wait()
 
 	if pp.checkpointMgr.Initialized() {
@@ -163,4 +166,5 @@ func (pp *partitionProcessor) Shutdown() {
 	}
 
 	_ = pp.checkpointMgr.Reset()
+	pp.checkpointMgr.Close()
 }

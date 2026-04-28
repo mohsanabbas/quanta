@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -35,7 +36,7 @@ func NewSlidingWindowCheckpointManager(windowBits uint32, capacity int) *Sliding
 	}
 }
 
-func (c *SlidingWindowCheckpointManager) Track(offset int64, size int64) error {
+func (c *SlidingWindowCheckpointManager) Track(ctx context.Context, offset int64, size int64) error {
 	if size <= 0 {
 		size = 1
 	}
@@ -46,7 +47,19 @@ func (c *SlidingWindowCheckpointManager) Track(offset int64, size int64) error {
 			c.acker.Track(offset, AckHandle{offset: offset, bytes: size})
 			return nil
 		}
-		time.Sleep(backoff)
+		// Honour ctx cancellation during the back-off so shutdown cannot
+		// wedge waiting up to the spin budget.
+		if ctx != nil {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		} else {
+			time.Sleep(backoff)
+		}
 		backoff *= 2
 		if backoff > _maxSpinBackoff {
 			backoff = _maxSpinBackoff
@@ -84,64 +97,91 @@ func (c *SlidingWindowCheckpointManager) Close() {
 
 type ApplicationControlledCheckpointManager struct {
 	mu          sync.Mutex
-	cond        *sync.Cond
 	capacity    int64
 	pending     map[int64]AckHandle
 	baseOffset  int64
 	initialized bool
 	closed      bool
+	notify      chan struct{} // buffered cap 1: kick parked Track callers
+	closeCh     chan struct{} // closed by Close
+	closeOnce   sync.Once
 }
 
 func NewApplicationControlledCheckpointManager(capacity int64) *ApplicationControlledCheckpointManager {
 	if capacity <= 0 {
 		capacity = 1000
 	}
-	mgr := &ApplicationControlledCheckpointManager{
+	return &ApplicationControlledCheckpointManager{
 		capacity:    capacity,
 		pending:     make(map[int64]AckHandle),
 		baseOffset:  -1,
 		initialized: false,
+		notify:      make(chan struct{}, 1),
+		closeCh:     make(chan struct{}),
 	}
-	mgr.cond = sync.NewCond(&mgr.mu)
-	return mgr
 }
 
-func (c *ApplicationControlledCheckpointManager) Track(offset int64, size int64) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// kick sends a non-blocking notify to wake one parked Track caller.
+func (c *ApplicationControlledCheckpointManager) kick() {
+	select {
+	case c.notify <- struct{}{}:
+	default:
+	}
+}
 
-	for !c.closed && int64(len(c.pending)) >= c.capacity {
-		c.cond.Wait()
-	}
-	if c.closed {
-		return ErrCheckpointClosed
-	}
+func (c *ApplicationControlledCheckpointManager) Track(ctx context.Context, offset int64, size int64) error {
 	if size <= 0 {
 		size = 1
 	}
+	// Loop re-checks capacity under the lock each iteration. This makes the
+	// cap-1 `notify` channel safe to be lossy: a missed wakeup only delays
+	// the next attempt, it cannot deadlock because the capacity check runs
+	// again before we re-park.
+	for {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return ErrCheckpointClosed
+		}
+		if int64(len(c.pending)) < c.capacity {
+			if !c.initialized {
+				c.baseOffset = offset
+				c.initialized = true
+			}
+			c.pending[offset] = AckHandle{offset: offset, bytes: size}
+			c.mu.Unlock()
+			return nil
+		}
+		c.mu.Unlock()
 
-	if !c.initialized {
-		c.baseOffset = offset
-		c.initialized = true
+		// Block until capacity, ctx cancellation, or close.
+		if ctx == nil {
+			select {
+			case <-c.notify:
+			case <-c.closeCh:
+				return ErrCheckpointClosed
+			}
+			continue
+		}
+		select {
+		case <-c.notify:
+		case <-c.closeCh:
+			return ErrCheckpointClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-
-	c.pending[offset] = AckHandle{
-		offset: offset,
-		bytes:  size,
-	}
-	return nil
 }
 
 func (c *ApplicationControlledCheckpointManager) Ack(offset int64) (AckHandle, int64, bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	handle, ok := c.pending[offset]
 	if !ok {
-		return AckHandle{}, c.baseOffset, false
+		base := c.baseOffset
+		c.mu.Unlock()
+		return AckHandle{}, base, false
 	}
 	delete(c.pending, offset)
-	c.cond.Broadcast()
 
 	oldBase := c.baseOffset
 	if len(c.pending) == 0 {
@@ -155,9 +195,12 @@ func (c *ApplicationControlledCheckpointManager) Ack(offset int64) (AckHandle, i
 		}
 		c.baseOffset = minOffset
 	}
-
 	advanced := c.baseOffset > oldBase
-	return handle, c.baseOffset, advanced
+	base := c.baseOffset
+	c.mu.Unlock()
+
+	c.kick()
+	return handle, base, advanced
 }
 
 func (c *ApplicationControlledCheckpointManager) Base() int64 {
@@ -174,8 +217,6 @@ func (c *ApplicationControlledCheckpointManager) Initialized() bool {
 
 func (c *ApplicationControlledCheckpointManager) Reset() []AckHandle {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	handles := make([]AckHandle, 0, len(c.pending))
 	for _, h := range c.pending {
 		handles = append(handles, h)
@@ -183,14 +224,18 @@ func (c *ApplicationControlledCheckpointManager) Reset() []AckHandle {
 	c.pending = make(map[int64]AckHandle)
 	c.baseOffset = -1
 	c.initialized = false
-	c.cond.Broadcast()
+	c.mu.Unlock()
+
+	c.kick()
 	return handles
 }
 
 func (c *ApplicationControlledCheckpointManager) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.closed = true
-	c.pending = nil
-	c.cond.Broadcast()
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.pending = nil
+		c.mu.Unlock()
+		close(c.closeCh)
+	})
 }

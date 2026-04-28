@@ -119,11 +119,9 @@ func main() {
 	log.Printf("seeding %d events to %s via %s", *count, *topic, *brokers)
 	sent := 0
 	for sent < *count {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
 			log.Printf("interrupted after %d enqueued", sent)
 			goto shutdown
-		default:
 		}
 
 		ev := generate(sent)

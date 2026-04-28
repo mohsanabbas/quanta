@@ -60,7 +60,7 @@ func TestSlidingWindowCheckpointManager_TrackAndAck(t *testing.T) {
 			t.Parallel()
 
 			mgr := NewSlidingWindowCheckpointManager(tt.windowBits, tt.capacity)
-			if err := mgr.Track(tt.trackOffset, tt.trackSize); err != nil {
+			if err := mgr.Track(t.Context(), tt.trackOffset, tt.trackSize); err != nil {
 				t.Fatalf("Track: %v", err)
 			}
 
@@ -111,12 +111,12 @@ func TestSlidingWindowCheckpointManager_BoundedBackoff(t *testing.T) {
 			mgr := NewSlidingWindowCheckpointManager(tt.window, tt.fill+1)
 
 			for i := 0; i < tt.fill; i++ {
-				if err := mgr.Track(int64(i), 1); err != nil {
+				if err := mgr.Track(t.Context(), int64(i), 1); err != nil {
 					t.Fatalf("Track(%d): %v", i, err)
 				}
 			}
 
-			err := mgr.Track(tt.nextOff, 1)
+			err := mgr.Track(t.Context(), tt.nextOff, 1)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Track(%d): got %v, want %v", tt.nextOff, err, tt.wantErr)
 			}
@@ -160,7 +160,7 @@ func TestApplicationControlledCheckpointManager_Lifecycle(t *testing.T) {
 			mgr := NewApplicationControlledCheckpointManager(tt.capacity)
 
 			for _, off := range tt.tracks {
-				if err := mgr.Track(off, 1); err != nil {
+				if err := mgr.Track(t.Context(), off, 1); err != nil {
 					t.Fatalf("Track(%d): %v", off, err)
 				}
 			}
@@ -182,13 +182,13 @@ func TestApplicationControlledCheckpointManager_BlocksUntilAck(t *testing.T) {
 	t.Parallel()
 
 	mgr := NewApplicationControlledCheckpointManager(1)
-	if err := mgr.Track(10, 7); err != nil {
+	if err := mgr.Track(t.Context(), 10, 7); err != nil {
 		t.Fatalf("Track: %v", err)
 	}
 
 	done := make(chan struct{})
 	go func() {
-		if err := mgr.Track(11, 9); err != nil {
+		if err := mgr.Track(t.Context(), 11, 9); err != nil {
 			t.Errorf("Track(11): %v", err)
 		}
 		close(done)
@@ -221,7 +221,7 @@ func TestApplicationControlledCheckpointManager_ClosedReturnsError(t *testing.T)
 	mgr := NewApplicationControlledCheckpointManager(10)
 	mgr.Close()
 
-	err := mgr.Track(1, 1)
+	err := mgr.Track(t.Context(), 1, 1)
 	if !errors.Is(err, ErrCheckpointClosed) {
 		t.Fatalf("expected ErrCheckpointClosed, got: %v", err)
 	}
@@ -232,10 +232,10 @@ func TestApplicationControlledCheckpointManager_ResetClearsState(t *testing.T) {
 
 	mgr := NewApplicationControlledCheckpointManager(10)
 
-	if err := mgr.Track(50, 10); err != nil {
+	if err := mgr.Track(t.Context(), 50, 10); err != nil {
 		t.Fatalf("Track: %v", err)
 	}
-	if err := mgr.Track(51, 20); err != nil {
+	if err := mgr.Track(t.Context(), 51, 20); err != nil {
 		t.Fatalf("Track: %v", err)
 	}
 
