@@ -1,0 +1,195 @@
+# AI Events Schema
+# Data Contract: AI Gateway CloudEvents
+# Aligned with Open Data Contract Standard (ODCS) v3.1.0
+
+kind: Schema
+apiVersion: v1
+name: ai_events
+description: AI gateway CloudEvents with token usage and latency metrics
+domain: ai-platform
+owner: platform-team
+tags:
+  - streaming
+  - ai
+  - metrics
+
+columns:
+  # CloudEvents envelope
+  - name: event_id
+    businessName: Event Identifier
+    description: Unique CloudEvents ID
+    path: id
+    type: string
+    physicalType: String
+    required: true
+    classification: internal
+
+  - name: event_type
+    businessName: Event Type
+    description: CloudEvents type attribute
+    path: type
+    type: string
+    physicalType: LowCardinality(String)
+    required: true
+    classification: public
+
+  - name: event_time
+    businessName: Event Timestamp
+    description: When the event occurred (RFC3339)
+    path: time
+    type: timestamp
+    physicalType: DateTime64(3)
+    required: true
+    classification: public
+
+  - name: event_source
+    businessName: Event Source
+    description: CloudEvents source URI
+    path: source
+    type: string
+    physicalType: String
+    required: true
+    classification: internal
+
+  # Business data
+  - name: request_id
+    businessName: Request ID
+    description: Unique request identifier for tracing
+    path: data.request_id
+    type: string
+    physicalType: String
+    required: true
+    classification: internal
+    tags:
+      - tracing
+
+  - name: provider
+    businessName: AI Provider
+    description: LLM provider name (openai, anthropic, etc.)
+    path: data.provider
+    type: string
+    physicalType: LowCardinality(String)
+    required: true
+    classification: public
+
+  - name: model
+    businessName: Model Name
+    description: Model identifier used for inference
+    path: data.model
+    type: string
+    physicalType: LowCardinality(String)
+    required: true
+    classification: public
+
+  - name: status
+    businessName: Response Status
+    description: Request outcome status
+    path: data.status
+    type: string
+    physicalType: LowCardinality(String)
+    required: true
+    classification: public
+
+  - name: status_class
+    businessName: Status Classification
+    description: Grouped status category
+    path: data.status_class
+    type: string
+    physicalType: LowCardinality(String)
+    default: "unknown"
+    classification: public
+
+  - name: input_tokens
+    businessName: Input Token Count
+    description: Number of tokens in the prompt
+    path: data.input_tokens
+    type: int64
+    physicalType: UInt32
+    default: 0
+    classification: internal
+    tags:
+      - metric
+      - billing
+
+  - name: output_tokens
+    businessName: Output Token Count
+    description: Number of tokens in the response
+    path: data.output_tokens
+    type: int64
+    physicalType: UInt32
+    default: 0
+    classification: internal
+    tags:
+      - metric
+      - billing
+
+  - name: total_tokens
+    businessName: Total Token Count
+    description: Sum of input and output tokens
+    path: data.total_tokens
+    type: int64
+    physicalType: UInt32
+    default: 0
+    classification: internal
+    tags:
+      - metric
+      - billing
+
+  - name: latency_ms
+    businessName: Request Latency
+    description: End-to-end latency in milliseconds
+    path: data.latency_ms
+    type: int64
+    physicalType: UInt32
+    default: 0
+    classification: internal
+    tags:
+      - metric
+      - slo
+
+  - name: temperature
+    businessName: Temperature Setting
+    description: Sampling temperature used
+    path: data.temperature
+    type: float64
+    physicalType: Float32
+    default: 0.0
+    classification: public
+
+  - name: user_id
+    businessName: User Identifier
+    description: User who made the request
+    path: data.user_id
+    type: string
+    physicalType: String
+    default: ""
+    classification: confidential
+    tags:
+      - pii
+
+  - name: org_id
+    businessName: Organization ID
+    description: Organization of the user
+    path: data.org_id
+    type: string
+    physicalType: LowCardinality(String)
+    default: ""
+    classification: internal
+
+  - name: environment
+    businessName: Environment
+    description: Deployment environment (prod, staging, canary)
+    path: data.environment
+    type: string
+    physicalType: LowCardinality(String)
+    default: "unknown"
+    classification: public
+
+  - name: stream_enabled
+    businessName: Streaming Enabled
+    description: Whether streaming was used
+    path: data.stream
+    type: bool
+    physicalType: UInt8
+    default: false
+    classification: public
