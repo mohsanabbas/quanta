@@ -7,6 +7,12 @@ import (
 	qerr "quanta/internal/errors"
 )
 
+// Format constants for S3 output.
+const (
+	FormatJSONL   = "jsonl"
+	FormatParquet = "parquet"
+)
+
 type Config struct {
 	Bucket     string `yaml:"bucket"`
 	Region     string `yaml:"region"`
@@ -50,9 +56,9 @@ func (c *Config) validate() error {
 		c.FlushInterval = _defaultFlushInterval
 	}
 	if c.Format == "" {
-		c.Format = "jsonl"
+		c.Format = FormatJSONL
 	}
-	if c.Format == "parquet" && c.SchemaFile == "" {
+	if c.Format == FormatParquet && c.SchemaFile == "" {
 		return qerr.Config("s3", "validate", errors.New("schema_file is required for parquet format"))
 	}
 

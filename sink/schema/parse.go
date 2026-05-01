@@ -7,8 +7,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SchemaFile is the YAML structure for schema files.
-type SchemaFile struct {
+// maxColumns is the maximum number of columns allowed in a schema.
+const maxColumns = 256
+
+// File is the YAML structure for schema files.
+// nolint:tagliatelle // ODCS standard uses camelCase
+type File struct {
 	Kind        string         `yaml:"kind"`
 	APIVersion  string         `yaml:"apiVersion"`
 	Name        string         `yaml:"name"`
@@ -20,6 +24,7 @@ type SchemaFile struct {
 }
 
 // ColumnConfig is the YAML structure for column definitions.
+// nolint:tagliatelle // ODCS standard uses camelCase
 type ColumnConfig struct {
 	Name           string   `yaml:"name"`
 	BusinessName   string   `yaml:"businessName"`
@@ -44,14 +49,14 @@ func LoadSchema(path string) (Schema, error) {
 
 // ParseSchema validates and converts YAML bytes to Schema.
 func ParseSchema(data []byte) (Schema, error) {
-	var file SchemaFile
+	var file File
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return Schema{}, fmt.Errorf("schema: invalid YAML: %w", err)
 	}
 	return validateSchema(file)
 }
 
-func validateSchema(file SchemaFile) (Schema, error) {
+func validateSchema(file File) (Schema, error) {
 	if file.Kind != "" && file.Kind != "Schema" {
 		return Schema{}, fmt.Errorf("schema: expected kind=Schema, got %q", file.Kind)
 	}
@@ -61,8 +66,8 @@ func validateSchema(file SchemaFile) (Schema, error) {
 	if len(file.Columns) == 0 {
 		return Schema{}, fmt.Errorf("schema: no columns defined")
 	}
-	if len(file.Columns) > 256 {
-		return Schema{}, fmt.Errorf("schema: too many columns (%d > 256)", len(file.Columns))
+	if len(file.Columns) > maxColumns {
+		return Schema{}, fmt.Errorf("schema: too many columns (%d > %d)", len(file.Columns), maxColumns)
 	}
 
 	cols := make([]Column, 0, len(file.Columns))

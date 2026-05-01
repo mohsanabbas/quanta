@@ -56,7 +56,7 @@ func newDriver(ctx context.Context, cfg Config, opts sink.BuildOptions) (sink.Ad
 
 	// Load schema for parquet format
 	var mapper *schema.Mapper
-	if cfg.Format == "parquet" {
+	if cfg.Format == FormatParquet {
 		s, err := schema.LoadSchema(cfg.SchemaFile)
 		if err != nil {
 			return nil, qerr.Sink("s3", "load_schema", err)
@@ -138,7 +138,7 @@ func (d *s3Driver) objectKey() string {
 	suffix := d.cfg.FileSuffix
 	if suffix == "" {
 		switch d.cfg.Format {
-		case "parquet":
+		case FormatParquet:
 			suffix = ".parquet"
 		default:
 			suffix = ".jsonl"

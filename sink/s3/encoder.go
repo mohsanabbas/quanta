@@ -12,6 +12,8 @@ import (
 	"quanta/sink/schema"
 )
 
+const intBitWidth = 64
+
 // Encoder transforms records into a wire format for S3 storage.
 type Encoder interface {
 	Encode(records [][]byte) ([]byte, error)
@@ -97,7 +99,7 @@ func buildParquetSchema(s schema.Schema) parquet.Group {
 		case schema.TypeString:
 			node = parquet.String()
 		case schema.TypeInt64:
-			node = parquet.Int(64)
+			node = parquet.Int(intBitWidth)
 		case schema.TypeFloat64:
 			node = parquet.Leaf(parquet.DoubleType)
 		case schema.TypeBool:

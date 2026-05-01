@@ -27,11 +27,7 @@ func TestCoerceString(t *testing.T) {
 			}
 			continue
 		}
-		got, err := coerceString(tt.input)
-		if err != nil {
-			t.Errorf("coerceString(%v) error = %v", tt.input, err)
-			continue
-		}
+		got := coerceString(tt.input)
 		if got != tt.want {
 			t.Errorf("coerceString(%v) = %q, want %q", tt.input, got, tt.want)
 		}

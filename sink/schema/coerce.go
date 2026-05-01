@@ -12,7 +12,7 @@ func coerce(val any, target LogicalType) (any, error) {
 
 	switch target {
 	case TypeString:
-		return coerceString(val)
+		return coerceString(val), nil
 	case TypeInt64:
 		return coerceInt64(val)
 	case TypeFloat64:
@@ -26,12 +26,12 @@ func coerce(val any, target LogicalType) (any, error) {
 	}
 }
 
-func coerceString(val any) (string, error) {
+func coerceString(val any) string {
 	switch v := val.(type) {
 	case string:
-		return v, nil
+		return v
 	default:
-		return fmt.Sprintf("%v", v), nil
+		return fmt.Sprintf("%v", v)
 	}
 }
 
