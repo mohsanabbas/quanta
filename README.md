@@ -1,6 +1,6 @@
 # Quanta
 
-A high-performance Go streaming engine that processes events from Kafka through transformers and delivers results to sinks with end-to-end delivery guarantees.
+A high-performance Go streaming engine that processes events from Kafka through transformers and delivers results to multiple sinks with end-to-end delivery guarantees.
 
 **Specifications & Architecture**: Full design documentation lives in the [Spec Book](docs/specs/SUMMARY.md).
 
@@ -8,26 +8,24 @@ A high-performance Go streaming engine that processes events from Kafka through 
 
 - **End-to-End Semantics**: At-least-once delivery with configurable commit modes (auto or e2e)
 - **Kafka Source & Sink**: Production-ready Kafka integration with Sarama driver
-- **S3 Sink**: Batched uploads to Amazon S3 (or LocalStack) with configurable flush intervals and at-least-once delivery
+- **S3 Sink**: Batched uploads with JSONL or Parquet format, schema-driven column mapping
+- **ClickHouse Sink**: Real-time OLAP analytics with native protocol, batch inserts, LZ4/ZSTD compression
+- **Schema Mapping**: ODCS-aligned data contracts for structured output (Parquet, ClickHouse)
 - **gRPC Transformers**: Unary RPC support with configurable retry policies
-- **Three-Path Error Handling**: Plugin `error_events` → per-transformer error sink, NackAware → engine DLQ, DeadLetterFn for infra failures
-- **Engine-Managed DLQ**: Configurable dead-letter queue sink for undeliverable frames (NackAware sinks)
+- **Three-Path Error Handling**: Plugin errors → transformer sink, NackAware → engine DLQ, DeadLetterFn for infra failures
+- **Engine-Managed DLQ**: Configurable dead-letter queue for undeliverable frames
 - **Backpressure Management**: Combined byte and message count limits prevent memory overflow
-- **Context-Aware Pipeline**: Graceful shutdowns and timeout propagation throughout the stack
 - **Sliding Window Checkpoints**: Efficient out-of-order acknowledgment handling
-- **Flexible Configuration**: Separate public config from performance tuning
 
 ## Quick Start
 
 ### Docker (Recommended)
 
-The fastest way to try Quanta with a complete Kafka stack:
-
 ```bash
 # Build binaries for your architecture
 make build-linux ARCH=arm64   # or amd64 for Intel/AMD
 
-# Start the stack (Kafka + Engine + Transformer)
+# Start the stack (Kafka + ClickHouse + Engine + Transformer)
 make docker-up ARCH=arm64
 
 # Watch the logs
@@ -36,46 +34,117 @@ make docker-logs
 # Check metrics
 curl -sf http://localhost:9100/metrics | head
 
-# Access Kafka UI
-open http://localhost:8080
+# Access UIs
+open http://localhost:8080      # Kafka UI
+open http://localhost:8082      # S3 Manager
+open http://localhost:8123/play # ClickHouse Play
 
 # Clean up
 make docker-down
 ```
 
 This starts:
-
-- Kafka broker (Bitnami Kafka with KRaft)
+- Kafka broker (KRaft mode)
 - Kafka UI (browse topics, consumers, lag)
 - LocalStack (local S3)
-- S3 Manager UI (browse S3 buckets at `http://localhost:8082`)
+- S3 Manager UI
+- ClickHouse server
 - Uppercase transformer (example gRPC service)
-- Quanta engine (processes events)
+- Quanta engine
 
 ### Local Development
 
-Run components separately on your host:
-
 ```bash
-# Terminal 1: Start the transformer
+# Terminal 1: Start transformer
 go run ./examples/transformers/uppercase --listen=:50052
 
-# Terminal 2: Start the engine
+# Terminal 2: Start engine
 go run ./cmd/engine
 
-# Override pipeline config if needed
+# Override pipeline config
 QUANTA_PIPELINE_YML=/path/to/pipeline.yml go run ./cmd/engine
 ```
 
-**Note**: For local runs, ensure Kafka is accessible at `localhost:9094` and update `topology/pipeline.yml` accordingly.
+## Sinks
+
+| Sink | Protocol | Format | Use Case |
+|------|----------|--------|----------|
+| **Kafka** | TCP | Binary | Event streaming, fan-out |
+| **S3** | HTTPS | JSONL, Parquet | Data lake, analytics |
+| **ClickHouse** | Native TCP | Columnar | Real-time OLAP |
+| **Stdout** | - | Text | Debugging |
+
+### S3 Sink
+
+```yaml
+sink_configs:
+  s3:
+    bucket: quanta-output
+    region: us-east-1
+    prefix: events/
+    
+    format: parquet                              # or jsonl
+    schema_file: topology/schemas/ai_events.schema.yaml
+    
+    batch_size: 1000
+    flush_interval: 10s
+    
+    auth_strategy: static                        # static, iam-role, env
+    access_key_id: ${AWS_ACCESS_KEY_ID}
+    secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+```
+
+### ClickHouse Sink
+
+```yaml
+sink_configs:
+  clickhouse:
+    host: "clickhouse:9000"
+    database: analytics
+    table: ai_events
+    schema_file: topology/schemas/ai_events.schema.yaml
+    
+    auth_strategy: native
+    username: default
+    password_env: CLICKHOUSE_PASSWORD           # Env var (secure)
+    
+    batch_size: 5000
+    flush_interval: 5s
+    compression: lz4
+```
+
+## Schema Mapping
+
+Both S3 (Parquet) and ClickHouse use ODCS-aligned schema files:
+
+```yaml
+# topology/schemas/ai_events.schema.yaml
+kind: Schema
+apiVersion: v1
+name: ai_events
+domain: ai-platform
+owner: platform-team
+
+columns:
+  - name: event_id
+    path: context.event_contract_id    # Dot-notation JSON path
+    type: string
+    required: true
+    
+  - name: event_time
+    path: context.created_at
+    type: timestamp
+    required: true
+    
+  - name: provider
+    path: properties.provider
+    type: string
+    required: true
+```
 
 ## Configuration
 
-All pipeline and source configuration files live in the `topology/` directory.
-
-### 1. Pipeline Configuration (`topology/pipeline.yml`)
-
-Defines the data flow and component wiring:
+### Pipeline (`topology/pipeline.yml`)
 
 ```yaml
 schema_version: v1
@@ -83,258 +152,108 @@ schema_version: v1
 source:
   kind: kafka
   driver: sarama
-  config: kafka_source.yml # Main Kafka config
+  config: kafka_source.yml
 
 transformers:
   - name: uppercase
     type: grpc
-    address: "localhost:50052" # Use service name in Docker
+    address: "localhost:50052"
     timeout_ms: 1000
-    retry_policy:
-      attempts: 3
-      backoff_ms: 200
-    error_sink: # Optional: per-transformer error sink
-      sink: kafka
-      config:
-        brokers: ["localhost:9094"]
-        topic: "uppercase-errors"
-        acks: all
 
 sinks:
-  - kafka # or stdout for debugging
-  - s3 # batched S3 uploads
+  - kafka
+  - s3
+  - clickhouse
 
 sink_configs:
   kafka:
     brokers: ["localhost:9094"]
-    topic: "quanta-output"
-    acks: "all"
+    topic: "output-events"
   s3:
     bucket: quanta-output
-    region: us-east-1
-    prefix: events
-    file_suffix: .jsonl
-    batch_size: 100
-    flush_interval: 5s
-    auth_strategy: static # static | iam-role | env
-    access_key_id: test
-    secret_access_key: test
-    endpoint: http://localhost:4566 # optional, for LocalStack
-    path_style: true # required for LocalStack
+    format: parquet
+    schema_file: topology/schemas/ai_events.schema.yaml
+  clickhouse:
+    host: "clickhouse:9000"
+    database: analytics
+    table: ai_events
+    schema_file: topology/schemas/ai_events.schema.yaml
 
-dlq: # Engine-managed dead-letter queue
+dlq:
   enabled: true
   sink: kafka
   config:
     brokers: ["localhost:9094"]
-    topic: "quanta-engine-dlq"
-    acks: all
-  include_original_headers: true
-  include_error_metadata: true
+    topic: "quanta-dlq"
 ```
-
-### 2. S3 Sink Configuration
-
-The S3 sink batches records into JSONL files and uploads them to S3. It supports:
-
-| Option           | Description                    | Default                        |
-| ---------------- | ------------------------------ | ------------------------------ |
-| `bucket`         | S3 bucket name                 | (required)                     |
-| `region`         | AWS region                     | (required unless endpoint set) |
-| `prefix`         | Key prefix (folder)            | `""`                           |
-| `file_suffix`    | File extension                 | `.jsonl`                       |
-| `batch_size`     | Records per file               | `100`                          |
-| `flush_interval` | Max time before flush          | `5s`                           |
-| `auth_strategy`  | `static`, `iam-role`, or `env` | (required)                     |
-| `endpoint`       | Custom endpoint (LocalStack)   | `""`                           |
-| `path_style`     | Use path-style URLs            | `false`                        |
-
-### 3. Kafka Source Configuration
-
-**Main Config** (`topology/kafka_source.yml`):
-
-```yaml
-schema_version: v1
-brokers: ["localhost:9094"]
-topics: ["input-topic"]
-group_id: "quanta-consumer"
-start_from: "newest" # oldest|newest
-commit_mode: "e2e" # auto|e2e
-version: "3.6.0"
-```
-
-**Tuning Config** (`topology/kafka_source.tuning.yml` - optional):
-
-```yaml
-inflight_bytes: 268435456 # 256 MiB
-inflight_msgs: 4096 # Concurrent messages
-window_bits: 8192 # Checkpoint window (≥ inflight_msgs)
-commit_interval: 5s # Time-based commits
-commit_step: 500 # Offset-based commits
-```
-
-The tuning file is **automatically loaded** by inserting `.tuning` before the extension.
 
 ### Environment Overrides
 
-Override configuration at runtime without editing files:
-
 ```bash
-# Source configuration
 export QUANTA_SOURCE__BROKERS="kafka1:9092,kafka2:9092"
-export QUANTA_SOURCE__GROUP_ID="my-consumer"
-
-# Tuning parameters
 export QUANTA_TUNING__INFLIGHT_MSGS=8192
-export QUANTA_TUNING__COMMIT_INTERVAL=10s
-
-docker-compose up -d
+export CLICKHOUSE_PASSWORD=secret
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
 ```
-
-### Configuration Precedence
-
-1. **Defaults** (lowest priority)
-2. **YAML files** (main + tuning)
-3. **Environment variables** (highest priority)
 
 ## Developer Commands
 
-| Command                        | Description                         |
-| ------------------------------ | ----------------------------------- |
-| `make build`                   | Build all Go modules for current OS |
-| `make build-linux ARCH=arm64`  | Cross-compile for Linux (Docker)    |
-| `make docker-build ARCH=arm64` | Build Docker images                 |
-| `make docker-up ARCH=arm64`    | Rebuild and start stack             |
-| `make docker-down`             | Stop and remove containers          |
-| `make docker-logs`             | Follow all container logs           |
-| `make docker-smoke`            | Health check (metrics endpoint)     |
-| `make proto`                   | Regenerate protobuf stubs           |
-| `make test`                    | Run all tests                       |
-| `make lint`                    | Run linters                         |
-
-## Documentation
-
-### Specifications
-
-- [Architecture Overview](docs/specs/architecture.md)
-- [Configuration Management](docs/specs/configuration.md)
-- [Source Specification](docs/specs/source.md)
-- [Sink Specification](docs/specs/sink.md)
-- [E2E Semantics](docs/specs/e2e-semantics.md)
-- [Error Handling](docs/specs/error-handling.md)
-- [Error Ownership](docs/specs/error-ownership.md)
-- [Sink Nack & DLQ Design](docs/specs/sink-nack-dlq.md)
-
-### Guides
-
-- [Tuning Guide](docs/guides/TUNING_GUIDE.md) - Performance tuning and scenarios
-- [Bug Fixes](docs/guides/BUGFIXES.md) - Recent fixes and improvements
-- [Tuning Loading Flow](docs/guides/TUNING_LOADING_FLOW.md) - How configuration is loaded
-
-### Configuration Reference
-
-- [CONFIGS.md](CONFIGS.md) - Complete YAML schema reference
-
-## Troubleshooting
-
-### Common Issues
-
-**Architecture Mismatch**
-
-```bash
-# Ensure binaries match container architecture
-make build-linux ARCH=arm64  # For Apple Silicon
-make build-linux ARCH=amd64  # For Intel/AMD
-```
-
-**Kafka Connection Issues**
-
-- Docker: Use service names (`kafka:29092`)
-- Host: Use `localhost:9094` or `host.docker.internal:9094`
-- Check `docker-compose logs kafka` for broker logs
-
-**Processing Stalls / Stuck Partitions**
-
-```yaml
-# Increase commit frequency in topology/kafka_source.tuning.yml
-commit_interval: 2s # Down from 5s
-commit_step: 100 # Down from 500
-```
-
-**High Memory Usage**
-
-```yaml
-# Reduce in-flight limits in topology/kafka_source.tuning.yml
-inflight_bytes: 134217728 # 128 MiB
-inflight_msgs: 2000
-```
-
-**Shutdown Panic (Fixed)**
-
-- Recent fix addresses semaphore release issues
-- Update to latest version if experiencing crashes on Ctrl+C
-
-### Debugging
-
-```bash
-# Enable verbose Sarama logging
-# In topology/kafka_source.yml:
-sarama_verbose: true
-
-# Use stdout sink for debugging
-# In topology/pipeline.yml:
-sinks:
-  - stdout
-
-# Check consumer lag in Kafka UI
-open http://localhost:8080
-```
+| Command | Description |
+|---------|-------------|
+| `make build` | Build all Go modules |
+| `make build-linux ARCH=arm64` | Cross-compile for Linux |
+| `make docker-up ARCH=arm64` | Build and start stack |
+| `make docker-down` | Stop containers |
+| `make docker-logs` | Follow logs |
+| `make proto` | Regenerate protobuf stubs |
+| `make test` | Run tests |
+| `make lint` | Run linters |
 
 ## Project Structure
 
 ```
 cmd/
   engine/              Engine entrypoint
-  ctl/                 CLI tools (future)
 internal/
   pipeline/            Pipeline compiler and runner
   config/              Configuration loaders
   engine/              Bootstrap logic
 source/
-  kafka/               Kafka source driver (Sarama)
+  kafka/               Kafka source (Sarama)
 sink/
-  kafka/               Kafka sink
-  s3/                  S3 sink (batched JSONL uploads)
+  kafka/               Kafka sink (AsyncProducer)
+  s3/                  S3 sink (JSONL, Parquet)
+  clickhouse/          ClickHouse sink (native protocol)
+  schema/              Schema mapping (ODCS-aligned)
+  batch/               Generic batching with Flusher[T]
   stdout/              Debug sink
 examples/
   transformers/        Sample gRPC transformers
 docs/
   specs/               Technical specifications
-  guides/              User guides and tutorials
-topology/              Pipeline & source YAML configs
+  guides/              User guides
+topology/              Pipeline & schema configs
 ```
+
+## Documentation
+
+### Specifications
+- [Architecture Overview](docs/specs/architecture.md)
+- [Sink Specification](docs/specs/sink.md)
+- [S3 Sink Config](docs/specs/config/s3-sink.md)
+- [ClickHouse Sink Config](docs/specs/config/clickhouse-sink.md)
+- [E2E Semantics](docs/specs/e2e-semantics.md)
+
+### Guides
+- [Tuning Guide](docs/guides/TUNING_GUIDE.md)
 
 ## Commit Modes
 
-### Auto Mode (High Throughput)
-
-- Offsets marked immediately after emit
-- Fast processing, fire-and-forget
-- ⚠️ Some message loss possible on crash
-- Use when: Speed > safety
-
-### E2E Mode (At-Least-Once)
-
-- Offsets committed after sink acknowledgment
-- Guaranteed delivery
-- Handles out-of-order acks with sliding window
-- Use when: No message loss tolerable
-
-See [docs/guides/TUNING_GUIDE.md](docs/guides/TUNING_GUIDE.md) for detailed scenarios and tuning advice.
-
-## Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| **Auto** | Commit on emit | High throughput |
+| **E2E** | Commit after sink ack | At-least-once delivery |
 
 ## Author
 

@@ -1,165 +1,160 @@
 # Architecture
 
+## Overview
+
+Quanta is a modular streaming engine that processes events from sources through transformers to sinks with end-to-end delivery guarantees.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────────────┐
+│   Source    │────▶│ Transformer │────▶│       Sinks         │
+│   (Kafka)   │     │   (gRPC)    │     │ Kafka/S3/ClickHouse │
+└─────────────┘     └─────────────┘     └─────────────────────┘
+       │                                          │
+       │           ┌───────────────┐              │
+       └──────────▶│AckCoordinator │◀─────────────┘
+                   │ (commit ctrl) │
+                   └───────────────┘
+```
+
+## Core Components
+
+| Component | Description |
+|-----------|-------------|
+| **Engine** | Go binary that bootstraps pipeline, gRPC control, and metrics |
+| **Source** | Kafka consumer wrapping records into Frame messages |
+| **Transformer** | gRPC plugins returning OK/DROP/RETRY/ERROR status |
+| **Sink** | Delivery adapters: Kafka, S3 (JSONL/Parquet), ClickHouse |
+| **AckCoordinator** | Refcounted barrier managing offset commits |
+
+---
+
 ## Engine Lifecycle
 
-1. **Build** – Configuration is parsed, adapter registrations are resolved, and each source/sink is configured with the root `context.Context`. The `AckCoordinator` is created and wired into the `Runner`. No goroutines are launched at this stage.
-2. **Start** – `Runner.Start(ctx)` starts the source. Frames emitted by the source run through the transformer chain and into sinks. `AckAware` sinks (Kafka, S3) publish asynchronously and call back through the coordinator when delivery is confirmed.
-3. **Stop** – Cancellation of the root context shuts down the pipeline. Sinks receive `Close(ctx)` first, followed by transformers, then the source. The transport server drains outstanding RPCs while the runner exits. Outstanding barriers are abandoned (no commit).
+1. **Build** – Parse config, resolve adapters, create AckCoordinator. No goroutines yet.
+2. **Start** – `Runner.Start(ctx)` begins source consumption. Frames flow through transformers to sinks.
+3. **Stop** – Context cancellation triggers graceful shutdown: sinks → transformers → source.
 
-## Context Propagation
+---
 
-- The source supplies a context for each emitted frame. Transformers and sinks _must_ honour deadlines and cancellations on that context.
-- Retries wrap the frame context with `context.WithTimeout`, ensuring cancellation cascades downstream.
-- Shutdown is graceful: once the root context is cancelled, blocking operations unblock and return errors.
+## Data Flow
 
-## Backpressure Semantics
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                              Engine                                  │
+│                                                                      │
+│  ┌─────────┐    ┌─────────┐    ┌──────────────────────────────────┐  │
+│  │  Kafka  │───▶│ Runner  │───▶│            Sinks                 │  │
+│  │ Source  │    │         │    │ ┌────────┐ ┌─────┐ ┌───────────┐ │  │
+│  └─────────┘    │         │    │ │ Kafka  │ │ S3  │ │ClickHouse │ │  │
+│       │         └────┬────┘    │ └────┬───┘ └──┬──┘ └─────┬─────┘ │  │
+│       │              │         └──────┼────────┼──────────┼───────┘  │
+│       │              │                │        │          │          │
+│       │         ┌────▼────┐           │        │          │          │
+│       │         │  gRPC   │           │        │          │          │
+│       │         │Transform│           │        │          │          │
+│       │         └─────────┘           │        │          │          │
+│       │                               │        │          │          │
+│       │    ┌──────────────────────────┼────────┼──────────┼───────┐  │
+│       │    │      AckCoordinator      │        │          │       │  │
+│       │    │  ┌─────────────────────────────────────────────────┐ │  │
+│       └────┼──│  Barrier(tok, refs) → Ack() → commit → Source   │─┘  │
+│            │  └─────────────────────────────────────────────────┘    │
+│            └─────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────┘
+```
 
-- Source drivers use bounded semaphores (`Controller`) to cap in-flight frames. If the pipeline stalls, sources block before `emit`.
-- `AckAware` sinks (Kafka, S3) publish non-blocking; backpressure propagates through the coordinator's outstanding barrier count.
-- Synchronous sinks (stdout) complete inline — the barrier receives its `Complete()` call immediately after `Publish` returns.
+---
 
-## Delivery Guarantees
+## Sink Architecture
 
-- Default behaviour: **at-least-once** delivery. Frames are retried until sinks confirm success.
-- **At-most-once** is not provided; offsets are never committed before processing completes.
-- **Exactly-once** is not guaranteed. Users can approach it with idempotent sinks and E2E mode.
-- **E2E Mode** defers offset commits until **all** sinks acknowledge via the `AckCoordinator` barrier, ensuring upstream brokers are only advanced after complete success.
+### Available Sinks
+
+| Sink | Protocol | Format | Use Case |
+|------|----------|--------|----------|
+| **Kafka** | TCP | Binary | Event streaming, fan-out |
+| **S3** | HTTPS | JSONL, Parquet | Data lake, analytics |
+| **ClickHouse** | TCP (native) | Columnar | Real-time OLAP |
+| **Stdout** | - | Text | Debugging |
+
+### Schema-Driven Sinks
+
+S3 (Parquet) and ClickHouse use `sink/schema` for JSON-to-column mapping:
+
+```
+JSON Event ──▶ Schema Mapper ──▶ Typed Columns ──▶ Sink
+                    │
+                    ▼
+            ODCS Schema YAML
+```
+
+---
 
 ## AckCoordinator
 
-The `AckCoordinator` is the **sole commit authority** in the pipeline. No component ever commits a checkpoint directly — all commits flow through the coordinator.
-
-### Design
-
-Inspired by the Linux kernel's `kref` refcounting pattern and Kafka's group-coordinator protocol:
-
-- **Barrier** — a refcounted completion token created per source frame. The reference count equals `len(derivedFrames) × ackAwareSinks + 1` (the `+1` accounts for synchronous sinks).
-- **Tri-state CAS** — each barrier transitions through exactly one of three terminal states: `Live → Committed` or `Live → Aborted`. A single `CompareAndSwap` arbitrates the race between `release()` and `Abort()`.
-- **Pointer-safe removal** — `removeBarrier` compares the map entry's pointer identity before deleting, preventing a successor barrier from being accidentally clobbered by its predecessor's cleanup.
+The coordinator manages offset commits using refcounted barriers.
 
 ### Barrier State Machine
 
-```mermaid
-stateDiagram-v2
-  [*] --> Live : Barrier(tok, refs)
-  Live --> Committed : refs ≤ 0 (CAS succeeds)
-  Live --> Aborted : Abort() CAS succeeds
-  Committed --> [*] : commit(tok) → source
-  Aborted --> [*] : removeBarrier (no commit)
+```
+         Barrier(tok, refs)
+                │
+                ▼
+         ┌──────────┐
+         │   Live   │
+         └────┬─────┘
+              │
+    ┌─────────┴─────────┐
+    │                   │
+refs ≤ 0            Abort()
+    │                   │
+    ▼                   ▼
+┌──────────┐     ┌──────────┐
+│Committed │     │ Aborted  │
+└────┬─────┘     └────┬─────┘
+     │                │
+     ▼                ▼
+  commit()       no commit
 ```
 
-### Data Flow
+### Flow
 
-```mermaid
-flowchart LR
-  kIn["Kafka Broker\n(input)"]
-  kOut["Kafka Broker\n(output)"]
-  s3["S3 Bucket"]
-
-  subgraph Engine
-    direction LR
-    src["Source Adapter\n(sarama)"]
-    run["Pipeline Runner\n(transform chain)"]
-    coord["AckCoordinator\n(barrier map)"]
-    snk_k["Kafka Sink\n(AckAware)"]
-    snk_s3["S3 Sink\n(AckAware)"]
-    snk_out["Stdout Sink\n(sync)"]
-  end
-
-  kIn --> src
-  src --> run
-  run -- "gRPC" --> xform["Transformer\n(gRPC)"]
-  xform -- "events" --> run
-
-  run -- "Barrier(tok, refs)" --> coord
-  run --> snk_k
-  run --> snk_s3
-  run -.-> snk_out
-
-  snk_k -- "Ack(tok)" --> coord
-  snk_s3 -- "Ack(tok)" --> coord
-  snk_out -- "Complete()" --> coord
-
-  snk_k --> kOut
-  snk_s3 --> s3
-
-  coord -- "commit → Subscribe" --> src
+```
+Source ──emit──▶ Runner ──Barrier(tok, refs)──▶ Coordinator
+                   │
+                   ├──▶ Kafka Sink ──Ack(tok)──▶ Coordinator
+                   ├──▶ S3 Sink ────Ack(tok)──▶ Coordinator
+                   └──▶ ClickHouse ─Ack(tok)──▶ Coordinator
+                                                     │
+                                              refs = 0
+                                                     │
+                                                     ▼
+                                              commit(offset)
+                                                     │
+                                                     ▼
+                                                  Source
 ```
 
-### Coordinator Sequence
+---
 
-```mermaid
-sequenceDiagram
-  participant Source
-  participant Runner
-  participant Coordinator as AckCoordinator
-  participant KafkaSink as Kafka Sink (AckAware)
-  participant S3Sink as S3 Sink (AckAware)
+## Delivery Guarantees
 
-  Source->>Runner: emit(ctx, frame)
-  Runner->>Runner: run transform chain
-  Runner->>Coordinator: Barrier(tok, refs=3)
-  Runner->>KafkaSink: Publish(frame₁)
-  Runner->>S3Sink: Publish(frame₁)
-  Note over KafkaSink: non-blocking enqueue
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| **Auto** | Commit on emit | High throughput, some loss OK |
+| **E2E** | Commit after all sinks ack | At-least-once delivery |
 
-  KafkaSink-->>Coordinator: Ack(tok) [on producer success]
-  S3Sink-->>Coordinator: Ack(tok) [on batch upload]
-  Runner->>Coordinator: Complete() [sync sinks done]
+---
 
-  Note over Coordinator: refs=0, CAS Live→Committed
-  Coordinator->>Source: Subscribe callback → commit offset
-```
+## Context Propagation
 
-### Transformer RPC Modes
+- Source provides context per frame
+- Transformers/sinks honor deadlines and cancellation
+- Shutdown: cancel root context → operations unblock → graceful drain
 
-```mermaid
-sequenceDiagram
-  participant Runner
-  participant UnaryClient as Unary gRPC Client
-  participant Transformer
+---
 
-  Runner->>UnaryClient: Transform(ctx, request)
-  UnaryClient->>Transformer: Transform(request)
-  Transformer-->>UnaryClient: TransformResponse(events)
-  UnaryClient-->>Runner: TransformResponse
-```
+## Backpressure
 
-```mermaid
-sequenceDiagram
-  participant Runner
-  participant StreamClient as Stream gRPC Client
-  participant Transformer
-
-  Runner->>StreamClient: TransformStream(ctx)
-  StreamClient->>Transformer: send frame batch
-  Transformer-->>StreamClient: stream responses
-  StreamClient-->>Runner: events / control
-```
-
-### Error & Abort Flow
-
-```mermaid
-sequenceDiagram
-  participant Runner
-  participant Coordinator as AckCoordinator
-  participant DeadLetter as DeadLetterFn
-  participant DLQ as DLQ Sink
-
-  Note over Runner,DLQ: Path A — Sync sink publish fails
-  Runner->>Coordinator: Barrier(tok, refs=2)
-  Runner->>Runner: publishAll fails
-  Runner->>Coordinator: barrier.Abort()
-  Note over Coordinator: CAS Live→Aborted, no commit
-  Runner->>Coordinator: Fail(stage, frame, err)
-  Coordinator->>DeadLetter: fn(stage, frame, err)
-
-  Note over Runner,DLQ: Path B — AckAware sink delivery failure (Nack)
-  Runner->>Coordinator: Barrier(tok, refs=2)
-  Runner->>Runner: publishAll succeeds (non-blocking)
-  Note over Runner: Async: sink permanently fails to deliver
-  Runner-->>Coordinator: Nack(ctx, frame, err)
-  Coordinator->>Coordinator: Abort barrier
-  Coordinator->>DLQ: Publish(dlq_frame)
-  Note over Coordinator: DLQ success → commit offset
-```
+- Source: bounded semaphore (`Controller`) caps in-flight frames
+- AckAware sinks: async publish, backpressure via outstanding barriers
+- Synchronous sinks: inline completion, direct backpressure

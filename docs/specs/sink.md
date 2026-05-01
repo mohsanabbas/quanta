@@ -1,14 +1,254 @@
 # Sink Specification
 
-Sinks implement:
+Sinks consume processed frames and deliver them to external systems with delivery guarantees.
+
+## Interface
 
 ```go
 type Adapter interface {
-    Configure(ctx context.Context, cfg any) error
+    Name() string
+    Caps() Capabilities
     Publish(ctx context.Context, frame *pb.Frame) error
     Close(ctx context.Context) error
 }
+
+type Capabilities struct {
+    AckAware  bool  // Async acknowledgment
+    NackAware bool  // Delivery failure detection
+}
 ```
+
+## Available Sinks
+
+| Sink | Protocol | AckAware | NackAware | Batching | Use Case |
+|------|----------|----------|-----------|----------|----------|
+| **kafka** | TCP | ✓ | ✓ | Producer batching | Event streaming, fan-out |
+| **s3** | HTTPS | ✓ | ✓ | File batching | Data lake, archival |
+| **clickhouse** | TCP (native) | ✓ | ✓ | Batch inserts | OLAP analytics |
+| **stdout** | - | - | - | - | Debugging |
+
+---
+
+## Kafka Sink
+
+Async producer using Sarama `AsyncProducer`.
+
+### Configuration
+
+```yaml
+sink_configs:
+  kafka:
+    brokers: ["kafka:29092"]
+    topic: "output-events"
+    required_acks: -1        # all replicas (default: 1)
+    compression: snappy      # none, gzip, snappy, lz4, zstd
+    max_message_bytes: 1048576
+```
+
+### Behavior
+- Non-blocking `Publish` → enqueues to producer
+- Ack loop reads `Successes` and `Errors` channels
+- Frame key becomes Kafka message key
+- Headers preserved from frame
+
+---
+
+## S3 Sink
+
+Batched uploads to S3-compatible storage.
+
+### Configuration
+
+```yaml
+sink_configs:
+  s3:
+    bucket: quanta-output
+    region: us-east-1
+    prefix: events/
+    
+    # Format: jsonl (default) or parquet
+    format: parquet
+    schema_file: topology/schemas/ai_events.schema.yaml
+    
+    # Batching
+    batch_size: 1000
+    flush_interval: 10s
+    
+    # Auth: static, iam-role, env
+    auth_strategy: static
+    access_key_id: ${AWS_ACCESS_KEY_ID}
+    secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+    
+    # Optional
+    endpoint: http://localhost:4566  # LocalStack
+    path_style: true
+    compression: snappy              # For parquet: snappy (default)
+```
+
+### Formats
+
+| Format | Content-Type | Schema Required | Use Case |
+|--------|--------------|-----------------|----------|
+| `jsonl` | `application/x-ndjson` | No | Simple, human-readable |
+| `parquet` | `application/vnd.apache.parquet` | Yes | Analytics (Spark, Athena, BigQuery) |
+
+### Parquet Features
+- Snappy compression (Spark/Databricks compatible)
+- Schema-driven column mapping via `sink/schema`
+- Microsecond timestamp precision
+- DataPageVersion 2 for better encoding
+
+### Output Structure
+```
+s3://quanta-output/
+└── events/
+    ├── 2025-05-01T10-00-00Z_batch001.parquet
+    ├── 2025-05-01T10-00-05Z_batch002.parquet
+    └── ...
+```
+
+---
+
+## ClickHouse Sink
+
+Real-time OLAP analytics via native protocol.
+
+### Configuration
+
+```yaml
+sink_configs:
+  clickhouse:
+    # Connection (host OR hosts for cluster)
+    host: "clickhouse:9000"
+    # hosts: ["ch1:9000", "ch2:9000"]  # Cluster mode
+    database: analytics
+    table: ai_events
+    
+    # Schema mapping
+    schema_file: topology/schemas/ai_events.schema.yaml
+    
+    # Auth: native, tls, env
+    auth_strategy: native
+    username: default
+    password_env: CLICKHOUSE_PASSWORD  # Env var (recommended)
+    
+    # Batching
+    batch_size: 5000
+    flush_interval: 5s
+    
+    # Compression: none, lz4 (default), zstd
+    compression: lz4
+    
+    # TLS (production)
+    tls: true
+    ca_cert: /etc/ssl/ca.pem
+    # client_cert: /etc/ssl/client.pem  # mTLS
+    # client_key: /etc/ssl/client.key
+    
+    # Connection pool
+    max_idle_conns: 5
+    max_open_conns: 10
+    conn_max_lifetime: 1h
+```
+
+### Authentication Strategies
+
+| Strategy | Use Case | Credentials |
+|----------|----------|-------------|
+| `native` | Simple deployments | `username` + `password` or `password_env` |
+| `tls` | Production mTLS | `client_cert` + `client_key` + `ca_cert` |
+| `env` | K8s secrets | `CH_USER`, `CH_PASSWORD` env vars |
+
+### Security
+- **Never logs**: hosts, username, password, certificates
+- Env var precedence: `password_env` overrides `password`
+- TLS validation: `insecure_skip_verify: true` for dev only
+
+### Batch Insert Flow
+```
+Frame → Flusher.Add() → batch fills → Seal
+                                        ↓
+                              conn.PrepareBatch(INSERT...)
+                              batch.Append(row...)
+                              batch.Send() → Ack/Nack
+```
+
+### ClickHouse Table Example
+```sql
+CREATE TABLE analytics.ai_events (
+    event_id String,
+    event_type LowCardinality(String),
+    event_time DateTime64(6, 'UTC'),
+    provider LowCardinality(String),
+    model String,
+    input_tokens Int64,
+    output_tokens Int64,
+    latency_ms Int64,
+    status LowCardinality(String)
+) ENGINE = MergeTree()
+ORDER BY (event_time, event_id)
+PARTITION BY toYYYYMM(event_time);
+```
+
+---
+
+## Stdout Sink
+
+Debug sink for development.
+
+### Configuration
+
+```yaml
+sink_configs:
+  stdout:
+    print_counter: true
+    print_value: true
+    value_max_bytes: 256
+```
+
+---
+
+## Schema Mapping
+
+Both S3 (Parquet) and ClickHouse sinks use `sink/schema` for JSON-to-column mapping.
+
+### Schema File (ODCS-aligned)
+
+```yaml
+kind: Schema
+apiVersion: v1
+name: ai_events
+domain: ai-platform
+owner: platform-team
+
+columns:
+  - name: event_id
+    path: context.event_contract_id  # Dot-notation path
+    type: string
+    required: true
+    
+  - name: event_time
+    path: context.created_at
+    type: timestamp                   # RFC3339 → time.Time
+    required: true
+    
+  - name: input_tokens
+    path: properties.input_tokens
+    type: int64
+    default: 0
+```
+
+### Supported Types
+
+| Type | JSON Source | Go Type |
+|------|-------------|---------|
+| `string` | string | `string` |
+| `int64` | number | `int64` |
+| `float64` | number | `float64` |
+| `bool` | boolean | `bool` |
+| `timestamp` | string (RFC3339) | `time.Time` |
+
+---
 
 ## AckAware Interface
 
@@ -22,11 +262,11 @@ type AckAware interface {
 }
 ```
 
-During pipeline wiring, `Runner.AddSink` detects `AckAware` sinks and calls `BindAck(coord.Ack)`, binding the sink directly to the `AckCoordinator`. When the sink confirms delivery, it invokes `EmitFn` with the frame's checkpoint token — the coordinator's barrier decrements its refcount and commits when all sinks have acked.
+When delivery is confirmed, sink calls `EmitFn(tok)` → coordinator commits offset.
 
 ## NackAware Interface
 
-Sinks that can detect per-message delivery failure implement `NackAware`:
+Sinks that detect delivery failure implement `NackAware`:
 
 ```go
 type NackFn func(ctx context.Context, frame *pb.Frame, err error)
@@ -36,72 +276,49 @@ type NackAware interface {
 }
 ```
 
-During pipeline wiring, `Runner.AddSink` detects `NackAware` sinks and calls `BindNack(coord.Nack)`, binding the sink to the `AckCoordinator`. When a sink permanently fails to deliver a frame, it invokes `NackFn` — the coordinator routes the frame to the engine-managed DLQ sink (if configured) and then acks the checkpoint token so the pipeline keeps flowing.
+On permanent failure, sink calls `NackFn(frame, err)` → frame routes to DLQ.
 
-A sink can implement both `AckAware` and `NackAware`. On success it calls `EmitFn(tok)`; on failure it calls `NackFn(frame, err)`. If no DLQ is configured, the coordinator does not commit the checkpoint token after the nack, so the frame will be redelivered by the source.
-
-### AckAware vs Synchronous Sinks
-
-| Property            | AckAware Sink                         | Synchronous Sink                               |
-| ------------------- | ------------------------------------- | ---------------------------------------------- |
-| `Publish` behaviour | Non-blocking enqueue                  | Blocking write                                 |
-| Ack mechanism       | Calls `EmitFn(tok)` on confirm        | Runner calls `barrier.Complete()` after return |
-| Nack mechanism      | Calls `NackFn(frame, err)` on failure | Returns error from `Publish`                   |
-| Barrier refs        | `N frames × M ackAware sinks`         | `+1` for all sync sinks combined               |
-| Examples            | Kafka, S3                             | Stdout                                         |
+---
 
 ## Registration
 
-Drivers register using `sink.Register(sink.Registration{Name: "kafka", New: func() Adapter { ... }, ConfigProto: func() any { return Config{} }})`. The pipeline requests the adapter and hands it a decoded config struct.
+Sinks register via blank import:
+
+```go
+// cmd/engine/main.go
+import (
+    _ "quanta/sink/kafka"
+    _ "quanta/sink/s3"
+    _ "quanta/sink/clickhouse"
+    _ "quanta/sink/stdout"
+)
+```
+
+Each sink package has `register.go`:
+
+```go
+func init() {
+    sink.Register("clickhouse", builder{})
+}
+
+type builder struct{}
+
+func (builder) Build(ctx context.Context, cfg any, opts sink.BuildOptions) (sink.Adapter, error) {
+    return newDriver(ctx, cfg.(Config), opts)
+}
+```
+
+---
 
 ## Publish Semantics
 
-- `Publish` must respect cancellation. If the context deadline is exceeded, return `ctx.Err()` and avoid acknowledging the frame.
-- The adapter should treat frames as immutable. Any batching must copy payloads/headers.
-- **AckAware sinks** attach the checkpoint token to in-flight metadata (e.g., Sarama's `msg.Metadata`) and ack asynchronously when the broker confirms delivery.
-- **Synchronous sinks** return from `Publish` once the write is complete; the runner treats the return as implicit acknowledgement.
-
-## Kafka Sink (AckAware + NackAware)
-
-The Kafka sink uses Sarama's `AsyncProducer`:
-
-```mermaid
-sequenceDiagram
-  participant Runner
-  participant KafkaSink
-  participant AsyncProducer as Sarama AsyncProducer
-  participant Coordinator as AckCoordinator
-
-  Runner->>KafkaSink: Publish(frame)
-  KafkaSink->>AsyncProducer: Input() ← msg{Metadata: inflight{frame}}
-  Note over KafkaSink: returns immediately (non-blocking)
-
-  AsyncProducer-->>KafkaSink: Successes channel
-  KafkaSink->>KafkaSink: ackLoop() extracts inflight
-  KafkaSink->>Coordinator: Ack(tok)
-```
-
-- `Publish` attaches `&inflight{frame}` as `msg.Metadata` and sends to `prod.Input()`.
-- `ackLoop()` goroutine reads both `Successes` and `Errors` channels:
-  - **Success:** `ackFromMetadata` extracts the `inflight` struct and calls `EmitFn(ctx, tok)`.
-  - **Error:** `nackFromMetadata` extracts the `inflight` struct; if `NackAware` is bound, calls `NackFn(ctx, frame, err)` — otherwise logs the error and withholds the ack for redelivery.
-- `Close` calls `AsyncClose()` and blocks on `<-doneCh` until `ackLoop()` drains both channels via `flushErrors`/`flushSuccesses`.
-
-## S3 Sink (AckAware + NackAware)
-
-The S3 sink batches frames and uploads on flush:
-
-- `uploadBatch` collects checkpoint tokens **and frames** from all entries in the batch.
-- On **success**, `ackAll()` calls `EmitFn(ctx, tok)` for every token in the batch.
-- On **failure** (encode error or `PutObject` error), `nackAll()` calls `NackFn(ctx, frame, err)` for every frame in the batch — routing them to the engine DLQ. If no DLQ is configured, the coordinator withholds the ack for redelivery.
-
-## Ordering & Idempotence
-
-- Drivers should maintain per-partition ordering by serialising writes per key.
-- Idempotence is achieved via consistent keys and deterministic payloads. Kafka sink uses the frame key directly.
+- `Publish` must respect context cancellation
+- Frames are immutable; batching must copy payloads
+- AckAware sinks: return immediately, ack async
+- Synchronous sinks: return = implicit ack
 
 ## Shutdown
 
-- `Close` should flush and release resources. It receives the same root context used to start the pipeline.
-- AckAware sinks must drain in-flight acknowledgements before returning from `Close`.
-- NackAware sinks must flush pending nacks (e.g., remaining producer errors) before returning from `Close`.
+- `Close` flushes pending batches and releases resources
+- AckAware sinks drain in-flight acknowledgements
+- NackAware sinks flush pending nacks to DLQ
