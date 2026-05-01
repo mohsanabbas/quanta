@@ -161,8 +161,8 @@ columns:
       - dimension
 
   - name: status_class
-    businessName: Status Class
-    description: Status category (2xx, 4xx, 5xx)
+    businessName: Finish Reason
+    description: Completion finish reason (stop, length, content_filter, tool_calls)
     path: properties.finish_reason
     type: string
     physicalType: LowCardinality(String)

@@ -9,7 +9,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"quanta/api/proto/v1"
+	pb "quanta/api/proto/v1"
 	"quanta/internal/errors"
 	"quanta/internal/logging"
 	"quanta/sink"
@@ -61,7 +61,10 @@ func newDriver(ctx context.Context, cfg Config, opts sink.BuildOptions) (*clickh
 
 	// Ping to verify connection
 	if err := conn.Ping(ctx); err != nil {
-		conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			logging.L().WarnContext(ctx, "clickhouse: close after ping failure",
+				"close_error", closeErr)
+		}
 		return nil, errors.Sink("clickhouse", "ping", err)
 	}
 
@@ -199,5 +202,10 @@ func (d *clickhouseDriver) insertBatch(ctx context.Context, records []batch.Reco
 
 func (d *clickhouseDriver) insertSQL() string {
 	cols := strings.Join(d.columns, ", ")
-	return fmt.Sprintf("INSERT INTO %s.%s (%s)", d.cfg.Database, d.cfg.Table, cols)
+	return fmt.Sprintf("INSERT INTO %s.%s (%s)", quoteIdent(d.cfg.Database), quoteIdent(d.cfg.Table), cols)
+}
+
+// quoteIdent quotes a ClickHouse identifier with backticks.
+func quoteIdent(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }

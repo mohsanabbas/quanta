@@ -139,7 +139,7 @@ services:
     container_name: quanta-clickhouse
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "clickhouse-client", "--password", "quanta123", "-q", "SELECT 1"]
+      test: ["CMD-SHELL", "clickhouse-client --user $${CLICKHOUSE_USER} --password $${CLICKHOUSE_PASSWORD} -q 'SELECT 1' >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 5

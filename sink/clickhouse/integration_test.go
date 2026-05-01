@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -47,25 +48,50 @@ func skipIfNoClickHouse(t *testing.T) {
 	if host == "" {
 		host = "localhost:9000"
 	}
-	// Quick check - try to create a config and validate
-	cfg := Config{
-		Host:         host,
-		Database:     "test_db",
-		Table:        "events",
-		Username:     os.Getenv("CLICKHOUSE_USER"),
-		Password:     os.Getenv("CLICKHOUSE_PASSWORD"),
-		AuthStrategy: AuthNative,
+
+	// Try to connect with short timeout to detect availability
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: []string{host},
+		Auth: clickhouse.Auth{
+			Username: func() string {
+				if u := os.Getenv("CLICKHOUSE_USER"); u != "" {
+					return u
+				}
+				return "default"
+			}(),
+			Password: func() string {
+				if p := os.Getenv("CLICKHOUSE_PASSWORD"); p != "" {
+					return p
+				}
+				return "test123"
+			}(),
+		},
+	})
+	if err != nil {
+		t.Skipf("ClickHouse not available: %v", err)
 	}
-	if cfg.Username == "" {
-		cfg.Username = "default"
+	defer conn.Close()
+
+	if err := conn.Ping(ctx); err != nil {
+		t.Skipf("ClickHouse not reachable: %v", err)
 	}
-	if cfg.Password == "" {
-		cfg.Password = "test123"
-	}
-	// Skip validation - we'll fail naturally if ClickHouse isn't available
+
 	t.Setenv("CLICKHOUSE_TEST_HOST", host)
-	t.Setenv("CLICKHOUSE_TEST_USER", cfg.Username)
-	t.Setenv("CLICKHOUSE_TEST_PASSWORD", cfg.Password)
+	t.Setenv("CLICKHOUSE_TEST_USER", func() string {
+		if u := os.Getenv("CLICKHOUSE_USER"); u != "" {
+			return u
+		}
+		return "default"
+	}())
+	t.Setenv("CLICKHOUSE_TEST_PASSWORD", func() string {
+		if p := os.Getenv("CLICKHOUSE_PASSWORD"); p != "" {
+			return p
+		}
+		return "test123"
+	}())
 }
 
 func TestIntegration_Connect(t *testing.T) {
@@ -110,22 +136,32 @@ columns:
 		FlushInterval: time.Second,
 	}
 
-	ackCount := 0
+	nackCh := make(chan error, 1)
 	opts := sink.BuildOptions{
-		Ack: func(ctx context.Context, tok *pb.CheckpointToken) {
-			ackCount++
+		Ack: func(_ context.Context, _ *pb.CheckpointToken) {
+			// Ack received
 		},
-		Nack: func(ctx context.Context, frame *pb.Frame, err error) {
-			t.Errorf("unexpected nack: %v", err)
+		Nack: func(_ context.Context, _ *pb.Frame, err error) {
+			select {
+			case nackCh <- err:
+			default:
+			}
 		},
 	}
 
 	driver, err := newDriver(ctx, cfg, opts)
 	require.NoError(t, err)
-	defer driver.Close(ctx)
 
 	assert.Equal(t, "clickhouse", driver.Name())
 	assert.True(t, driver.Caps().AckAware)
+
+	require.NoError(t, driver.Close(ctx))
+
+	select {
+	case err := <-nackCh:
+		require.NoError(t, err, "unexpected nack")
+	default:
+	}
 }
 
 func TestIntegration_InsertBatch(t *testing.T) {

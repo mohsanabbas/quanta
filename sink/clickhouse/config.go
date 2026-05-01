@@ -17,8 +17,6 @@ const (
 	defaultMaxIdleConns  = 5
 	defaultMaxOpenConns  = 10
 	defaultConnMaxLife   = time.Hour
-	defaultMaxRetries    = 3
-	defaultRetryInterval = time.Second
 )
 
 // Environment variable names for AuthEnv strategy.
@@ -55,10 +53,6 @@ type Config struct {
 	// Batching
 	BatchSize     int           `yaml:"batch_size"`
 	FlushInterval time.Duration `yaml:"flush_interval"`
-
-	// Retry
-	MaxRetries    int           `yaml:"max_retries"`
-	RetryInterval time.Duration `yaml:"retry_interval"`
 
 	// Connection pool
 	DialTimeout  time.Duration `yaml:"dial_timeout"`
@@ -106,12 +100,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ConnMaxLife <= 0 {
 		c.ConnMaxLife = defaultConnMaxLife
-	}
-	if c.MaxRetries <= 0 {
-		c.MaxRetries = defaultMaxRetries
-	}
-	if c.RetryInterval <= 0 {
-		c.RetryInterval = defaultRetryInterval
 	}
 	if c.AuthStrategy == "" {
 		c.AuthStrategy = AuthNative
@@ -176,7 +164,10 @@ func (c *Config) addrs() []string {
 }
 
 // String returns a log-safe representation without sensitive credentials.
-func (c Config) String() string {
+func (c *Config) String() string {
+	if c == nil {
+		return "ClickHouse{nil}"
+	}
 	return fmt.Sprintf("clickhouse{db=%s table=%s auth=%s tls=%v batch_size=%d}",
 		c.Database, c.Table, c.AuthStrategy, c.TLS, c.BatchSize)
 }

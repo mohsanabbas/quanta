@@ -153,16 +153,16 @@ sink_configs:
 
 ### Authentication Strategies
 
-| Strategy | Use Case | Credentials |
-|----------|----------|-------------|
-| `native` | Simple deployments | `username` + `password` or `password_env` |
-| `tls` | Production mTLS | `client_cert` + `client_key` + `ca_cert` |
-| `env` | K8s secrets | `CH_USER`, `CH_PASSWORD` env vars |
+| Strategy | Use Case           | Credentials                                                                                     |
+|----------|--------------------|-------------------------------------------------------------------------------------------------|
+| `native` | Simple deployments | `username` + `password` or `password_env`                                                       |
+| `tls`    | Production mTLS    | `client_cert` + `client_key` + `ca_cert`                                                        |
+| `env`    | K8s secrets        | `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` env vars (override with `username_env`/`password_env`) |
 
 ### Security
 - **Never logs**: hosts, username, password, certificates
 - Env var precedence: `password_env` overrides `password`
-- TLS validation: `insecure_skip_verify: true` for dev only
+- TLS validation: `tls_insecure: true` for dev only
 
 ### Batch Insert Flow
 ```
@@ -250,33 +250,28 @@ columns:
 
 ---
 
-## AckAware Interface
+## Ack/Nack Callbacks
 
-Sinks that confirm delivery asynchronously implement `AckAware`:
+Sinks receive ack/nack callbacks via `BuildOptions` during construction:
 
 ```go
 type EmitFn func(ctx context.Context, tok *pb.CheckpointToken)
-
-type AckAware interface {
-    BindAck(EmitFn)
-}
-```
-
-When delivery is confirmed, sink calls `EmitFn(tok)` → coordinator commits offset.
-
-## NackAware Interface
-
-Sinks that detect delivery failure implement `NackAware`:
-
-```go
 type NackFn func(ctx context.Context, frame *pb.Frame, err error)
 
-type NackAware interface {
-    BindNack(NackFn)
+type BuildOptions struct {
+    Ack  EmitFn
+    Nack NackFn
+}
+
+type Capabilities struct {
+    AckAware  bool  // Sink will call Ack callback
+    NackAware bool  // Sink will call Nack callback
 }
 ```
 
-On permanent failure, sink calls `NackFn(frame, err)` → frame routes to DLQ.
+When delivery is confirmed, sink calls `opts.Ack(tok)` → coordinator commits offset.
+
+On permanent failure, sink calls `opts.Nack(frame, err)` → frame routes to DLQ.
 
 ---
 
@@ -298,13 +293,24 @@ Each sink package has `register.go`:
 
 ```go
 func init() {
-    sink.Register("clickhouse", builder{})
+    sink.Register(sink.Registration{
+        Name:         "clickhouse",
+        DecodeConfig: decodeConfig,
+        New:          newClickHouseSink,
+    })
 }
 
-type builder struct{}
+func decodeConfig(raw any) (any, error) {
+    var cfg Config
+    if err := config.DecodeYAML(raw, &cfg); err != nil {
+        return nil, err
+    }
+    return cfg, nil
+}
 
-func (builder) Build(ctx context.Context, cfg any, opts sink.BuildOptions) (sink.Adapter, error) {
-    return newDriver(ctx, cfg.(Config), opts)
+func newClickHouseSink(ctx context.Context, raw any, opts sink.BuildOptions) (sink.Adapter, error) {
+    cfg := raw.(Config)
+    return newDriver(ctx, cfg, opts)
 }
 ```
 

@@ -120,8 +120,6 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	assert.Equal(t, defaultMaxIdleConns, cfg.MaxIdleConns)
 	assert.Equal(t, defaultMaxOpenConns, cfg.MaxOpenConns)
 	assert.Equal(t, defaultConnMaxLife, cfg.ConnMaxLife)
-	assert.Equal(t, defaultMaxRetries, cfg.MaxRetries)
-	assert.Equal(t, defaultRetryInterval, cfg.RetryInterval)
 	assert.Equal(t, AuthNative, cfg.AuthStrategy)
 	assert.Equal(t, CompressionLZ4, cfg.Compression)
 }
@@ -443,7 +441,7 @@ func TestDriver_InsertSQL(t *testing.T) {
 	}
 
 	sql := d.insertSQL()
-	assert.Equal(t, "INSERT INTO analytics.events (id, name, value)", sql)
+	assert.Equal(t, "INSERT INTO `analytics`.`events` (id, name, value)", sql)
 }
 
 func TestDriver_NameAndCaps(t *testing.T) {

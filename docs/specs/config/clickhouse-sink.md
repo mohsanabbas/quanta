@@ -4,30 +4,30 @@ Real-time OLAP analytics via ClickHouse native protocol.
 
 ## Configuration Reference
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `host` | string | Yes* | - | Single host (`host:9000`) |
-| `hosts` | []string | Yes* | - | Cluster hosts (*or host) |
-| `database` | string | Yes | - | Target database |
-| `table` | string | Yes | - | Target table |
-| `schema_file` | string | Yes | - | Path to schema YAML |
-| `auth_strategy` | string | No | `native` | `native`, `tls`, or `env` |
-| `username` | string | native | - | ClickHouse username |
-| `password` | string | No | - | Password (prefer `password_env`) |
-| `username_env` | string | No | - | Env var for username |
-| `password_env` | string | No | - | Env var for password |
-| `tls` | bool | No | `false` | Enable TLS |
-| `insecure_skip_verify` | bool | No | `false` | Skip TLS verification (dev only) |
-| `ca_cert` | string | No | - | Path to CA certificate |
-| `client_cert` | string | tls auth | - | Path to client certificate |
-| `client_key` | string | tls auth | - | Path to client key |
-| `batch_size` | int | No | `10000` | Records per batch insert |
-| `flush_interval` | duration | No | `5s` | Max time before flush |
-| `compression` | string | No | `lz4` | `none`, `lz4`, or `zstd` |
-| `dial_timeout` | duration | No | `10s` | Connection timeout |
-| `max_idle_conns` | int | No | `5` | Idle connection pool |
-| `max_open_conns` | int | No | `10` | Max connections |
-| `conn_max_lifetime` | duration | No | `1h` | Connection lifetime |
+| Field               | Type     | Required | Default  | Description                      |
+|---------------------|----------|----------|----------|----------------------------------|
+| `host`              | string   | Yes*     | -        | Single host (`host:9000`)        |
+| `hosts`             | []string | Yes*     | -        | Cluster hosts (*or host)         |
+| `database`          | string   | Yes      | -        | Target database                  |
+| `table`             | string   | Yes      | -        | Target table                     |
+| `schema_file`       | string   | Yes      | -        | Path to schema YAML              |
+| `auth_strategy`     | string   | No       | `native` | `native`, `tls`, or `env`        |
+| `username`          | string   | native   | -        | ClickHouse username              |
+| `password`          | string   | No       | -        | Password (prefer `password_env`) |
+| `username_env`      | string   | No       | -        | Env var for username             |
+| `password_env`      | string   | No       | -        | Env var for password             |
+| `tls`               | bool     | No       | `false`  | Enable TLS                       |
+| `tls_insecure`      | bool     | No       | `false`  | Skip TLS verification (dev only) |
+| `ca_cert`           | string   | No       | -        | Path to CA certificate           |
+| `client_cert`       | string   | tls auth | -        | Path to client certificate       |
+| `client_key`        | string   | tls auth | -        | Path to client key               |
+| `batch_size`        | int      | No       | `10000`  | Records per batch insert         |
+| `flush_interval`    | duration | No       | `5s`     | Max time before flush            |
+| `compression`       | string   | No       | `lz4`    | `none`, `lz4`, or `zstd`         |
+| `dial_timeout`      | duration | No       | `10s`    | Connection timeout               |
+| `max_idle_conns`    | int      | No       | `5`      | Idle connection pool             |
+| `max_open_conns`    | int      | No       | `10`     | Max connections                  |
+| `conn_max_lifetime` | duration | No       | `1h`     | Connection lifetime              |
 
 ## Authentication Strategies
 
