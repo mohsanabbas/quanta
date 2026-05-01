@@ -134,6 +134,41 @@ services:
     networks:
       - quanta-net
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: quanta-clickhouse
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user $${CLICKHOUSE_USER} --password $${CLICKHOUSE_PASSWORD} -q 'SELECT 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: quanta123
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - clickhouse_data:/var/lib/clickhouse
+    networks:
+      - quanta-net
+
+  clickhouse-ui:
+    image: spoonest/clickhouse-tabix-web-client
+    container_name: quanta-clickhouse-ui
+    restart: unless-stopped
+    ports:
+      - "8084:80"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - quanta-net
+
   s3manager:
     image: cloudlena/s3manager
     container_name: quanta-s3manager
@@ -206,3 +241,4 @@ networks:
 volumes:
   kafka_data:
   localstack_data:
+  clickhouse_data:

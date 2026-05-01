@@ -40,7 +40,7 @@ func BenchmarkBatch_Seal(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		batch := New[[]byte](100)
-		for j := 0; j < 100; j++ {
+		for range 100 {
 			batch.Append(data, cp, frame, 256)
 		}
 		_ = batch.Seal()

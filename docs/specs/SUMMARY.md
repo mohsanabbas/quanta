@@ -15,8 +15,16 @@
 - [Naming Conventions](naming.md)
 - [Examples & Quickstarts](examples.md)
 
+## Configuration Reference
+
+- [Configuration Index](config/index.md)
+- [Kafka Source](config/kafka-source.md)
+- [Kafka Sink](config/kafka-sink.md)
+- [S3 Sink](config/s3-sink.md)
+- [ClickHouse Sink](config/clickhouse-sink.md)
+- [Stdout Sink](config/stdout-sink.md)
+
 ## User Guides
 
 - [Tuning Guide](../guides/TUNING_GUIDE.md) - Performance tuning and scenarios
-- [Bug Fixes](../guides/BUGFIXES.md) - Recent fixes and improvements
 - [Tuning Loading Flow](../guides/TUNING_LOADING_FLOW.md) - How configuration is loaded

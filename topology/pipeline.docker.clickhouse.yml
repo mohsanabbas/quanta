@@ -1,0 +1,53 @@
+# Pipeline config: Kafka → ClickHouse (Docker)
+# E2E test for ClickHouse sink with ODCS schema
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.docker.yml
+
+sinks:
+  - clickhouse
+
+sink_configs:
+  clickhouse:
+    host: "clickhouse:9000"
+    database: analytics
+    table: ai_events
+    
+    auth_strategy: native
+    username: default
+    password: quanta123
+    
+    tls: false  # Docker internal network
+    
+    schema_file: /config/schemas/ai_events.schema.yaml
+    
+    batch_size: 1000
+    flush_interval: 5s
+    compression: lz4
+    
+    dial_timeout: 10s
+    max_idle_conns: 5
+    max_open_conns: 10
+
+debug:
+  per_frame_delay_ms: 0
+  print_counter: false
+  ack_batch_size: 1
+  ack_flush_ms: 0
+
+dlq:
+  enabled: true
+  sink: kafka
+  config:
+    brokers: ["kafka:29092"]
+    topic: "quanta-dlq"
+    acks: "all"
+    version: "3.6.0"
+    client_id: "quanta-dlq-clickhouse"
+    timeout: 10s
+    retry_max: 3
+    retry_backoff_min: 100ms
+    retry_backoff_max: 1s

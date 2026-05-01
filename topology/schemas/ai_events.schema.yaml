@@ -1,11 +1,11 @@
 # AI Events Schema
-# Data Contract: AI Gateway CloudEvents
+# Data Contract: AI Gateway Events (Raw Kafka Format)
 # Aligned with Open Data Contract Standard (ODCS) v3.1.0
 
 kind: Schema
 apiVersion: v1
 name: ai_events
-description: AI gateway CloudEvents with token usage and latency metrics
+description: AI gateway events with token usage and latency metrics
 domain: ai-platform
 owner: platform-team
 tags:
@@ -14,11 +14,11 @@ tags:
   - metrics
 
 columns:
-  # CloudEvents envelope
+  # Event identification (from context)
   - name: event_id
     businessName: Event Identifier
-    description: Unique CloudEvents ID
-    path: id
+    description: Unique event contract ID
+    path: context.event_contract_id
     type: string
     physicalType: String
     required: true
@@ -26,8 +26,8 @@ columns:
 
   - name: event_type
     businessName: Event Type
-    description: CloudEvents type attribute
-    path: type
+    description: Type of AI event
+    path: context.event
     type: string
     physicalType: LowCardinality(String)
     required: true
@@ -35,131 +35,156 @@ columns:
 
   - name: event_time
     businessName: Event Timestamp
-    description: When the event occurred (RFC3339)
-    path: time
+    description: When the event was created (RFC3339)
+    path: context.created_at
     type: timestamp
-    physicalType: DateTime64(3)
+    physicalType: DateTime64(6, 'UTC')
     required: true
     classification: public
 
   - name: event_source
     businessName: Event Source
-    description: CloudEvents source URI
-    path: source
+    description: Application that generated the event
+    path: context.app_name
     type: string
     physicalType: String
     required: true
-    classification: internal
+    classification: public
 
-  # Business data
-  - name: request_id
-    businessName: Request ID
-    description: Unique request identifier for tracing
-    path: data.request_id
-    type: string
-    physicalType: String
-    required: true
-    classification: internal
-    tags:
-      - tracing
-
+  # AI provider details (from properties)
   - name: provider
     businessName: AI Provider
-    description: LLM provider name (openai, anthropic, etc.)
-    path: data.provider
+    description: LLM provider name (openai, anthropic, google)
+    path: properties.provider
     type: string
     physicalType: LowCardinality(String)
     required: true
     classification: public
+    tags:
+      - dimension
 
   - name: model
     businessName: Model Name
-    description: Model identifier used for inference
-    path: data.model
+    description: Specific model used (gpt-4o, claude-opus-4, etc.)
+    path: properties.model
     type: string
-    physicalType: LowCardinality(String)
+    physicalType: String
     required: true
     classification: public
+    tags:
+      - dimension
 
-  - name: status
-    businessName: Response Status
-    description: Request outcome status
-    path: data.status
+  - name: request_id
+    businessName: Request Identifier
+    description: Unique request ID for tracing
+    path: properties.request_id
     type: string
-    physicalType: LowCardinality(String)
+    physicalType: String
     required: true
-    classification: public
-
-  - name: status_class
-    businessName: Status Classification
-    description: Grouped status category
-    path: data.status_class
-    type: string
-    physicalType: LowCardinality(String)
-    default: "unknown"
-    classification: public
-
-  - name: input_tokens
-    businessName: Input Token Count
-    description: Number of tokens in the prompt
-    path: data.input_tokens
-    type: int64
-    physicalType: UInt32
-    default: 0
     classification: internal
+
+  # Token usage metrics
+  - name: input_tokens
+    businessName: Input Tokens
+    description: Number of tokens in the prompt
+    path: properties.input_tokens
+    type: int64
+    physicalType: Int64
+    default: 0
+    classification: public
     tags:
       - metric
-      - billing
 
   - name: output_tokens
-    businessName: Output Token Count
+    businessName: Output Tokens
     description: Number of tokens in the response
-    path: data.output_tokens
+    path: properties.output_tokens
     type: int64
-    physicalType: UInt32
+    physicalType: Int64
     default: 0
-    classification: internal
+    classification: public
     tags:
       - metric
-      - billing
 
   - name: total_tokens
-    businessName: Total Token Count
+    businessName: Total Tokens
     description: Sum of input and output tokens
-    path: data.total_tokens
+    path: properties.total_tokens
     type: int64
-    physicalType: UInt32
+    physicalType: Int64
     default: 0
-    classification: internal
+    classification: public
     tags:
       - metric
-      - billing
 
+  # Performance metrics
   - name: latency_ms
-    businessName: Request Latency
-    description: End-to-end latency in milliseconds
-    path: data.latency_ms
+    businessName: Latency (ms)
+    description: Request latency in milliseconds
+    path: properties.latency_ms
     type: int64
-    physicalType: UInt32
+    physicalType: Int64
     default: 0
-    classification: internal
+    classification: public
     tags:
       - metric
-      - slo
 
+  # Request configuration
   - name: temperature
-    businessName: Temperature Setting
-    description: Sampling temperature used
-    path: data.temperature
+    businessName: Temperature
+    description: Sampling temperature (0.0-2.0)
+    path: properties.temperature
     type: float64
-    physicalType: Float32
+    physicalType: Float64
     default: 0.0
     classification: public
 
-  - name: user_id
-    businessName: User Identifier
-    description: User who made the request
-    path: data.user_id
+  - name: stream_enabled
+    businessName: Stream Enabled
+    description: Whether streaming was enabled
+    path: properties.stream
+    type: bool
+    physicalType: UInt8
+    default: false
+    classification: public
+
+  # Status
+  - name: status
+    businessName: Status
+    description: Request status (success, timeout, error, rate_limited)
+    path: properties.status
+    type: string
+    physicalType: LowCardinality(String)
+    required: true
+    classification: public
+    tags:
+      - dimension
+
+  - name: status_class
+    businessName: Finish Reason
+    description: Completion finish reason (stop, length, content_filter, tool_calls)
+    path: properties.finish_reason
+    type: string
+    physicalType: LowCardinality(String)
+    default: ""
+    classification: public
+
+  # Tenant context
+  - name: environment
+    businessName: Environment
+    description: Deployment environment (prod, staging, canary)
+    path: context.environment
+    type: string
+    physicalType: LowCardinality(String)
+    default: ""
+    classification: public
+    tags:
+      - dimension
+
+  - name: org_id
+    businessName: Organization ID
+    description: Customer organization identifier
+    path: context.org_id
     type: string
     physicalType: String
     default: ""
@@ -167,29 +192,13 @@ columns:
     tags:
       - pii
 
-  - name: org_id
-    businessName: Organization ID
-    description: Organization of the user
-    path: data.org_id
+  - name: user_id
+    businessName: User Identifier
+    description: User who made the request
+    path: context.user_id
     type: string
-    physicalType: LowCardinality(String)
+    physicalType: String
     default: ""
-    classification: internal
-
-  - name: environment
-    businessName: Environment
-    description: Deployment environment (prod, staging, canary)
-    path: data.environment
-    type: string
-    physicalType: LowCardinality(String)
-    default: "unknown"
-    classification: public
-
-  - name: stream_enabled
-    businessName: Streaming Enabled
-    description: Whether streaming was used
-    path: data.stream
-    type: bool
-    physicalType: UInt8
-    default: false
-    classification: public
+    classification: confidential
+    tags:
+      - pii

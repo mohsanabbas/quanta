@@ -1,0 +1,45 @@
+package clickhouse
+
+import (
+	"context"
+	"errors"
+
+	"quanta/internal/config"
+	qerr "quanta/internal/errors"
+	"quanta/sink"
+)
+
+var errBadConfigType = errors.New("unexpected config type")
+
+func init() {
+	sink.Register(sink.Registration{
+		Name:         "clickhouse",
+		DecodeConfig: decodeConfig,
+		New:          newClickHouseSink,
+	})
+}
+
+func decodeConfig(raw any) (any, error) {
+	switch v := raw.(type) {
+	case Config:
+		return v, nil
+	case *Config:
+		if v == nil {
+			return nil, qerr.Config("clickhouse", "decode", errors.New("nil config"))
+		}
+		return *v, nil
+	}
+	var cfg Config
+	if err := config.DecodeYAML(raw, &cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func newClickHouseSink(ctx context.Context, raw any, opts sink.BuildOptions) (sink.Adapter, error) {
+	cfg, ok := raw.(Config)
+	if !ok {
+		return nil, qerr.Sink("clickhouse", "build", qerr.Wrapf(errBadConfigType, "got %T", raw))
+	}
+	return newDriver(ctx, cfg, opts)
+}
