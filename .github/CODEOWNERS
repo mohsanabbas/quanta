@@ -1,6 +1,14 @@
-# Require review from owners by path
-/api/proto/            @mohsanabbas
-/internal/engine/      @mohsanabbas
-/internal/pipeline/    @mohsanabbas
-/internal/transform/   @mohsanabbas
-/internal/telemetry/   @mohsanabbas
+# Quanta Code Owners
+# These owners will be requested for review on all PRs
+
+# Default owner for everything
+* @mohsanabbas
+
+# Critical paths - require owner review
+/cmd/                @mohsanabbas
+/internal/           @mohsanabbas
+/sink/               @mohsanabbas
+/source/             @mohsanabbas
+/LICENSE             @mohsanabbas
+/go.mod              @mohsanabbas
+/.github/            @mohsanabbas
