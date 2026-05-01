@@ -395,7 +395,7 @@ func newTestDriverWithOpts(t *testing.T, spy *spyClient, opts sink.BuildOptions)
 	cfg := validCfg()
 	require.NoError(t, cfg.validate())
 
-	enc, err := newEncoder(cfg.Format)
+	enc, err := newEncoder(cfg.Format, nil)
 	require.NoError(t, err)
 
 	return newDriverWithClient(context.Background(), cfg, spy, enc, opts)
@@ -408,7 +408,7 @@ func newTestDriverWithEncoder(t *testing.T, spy *spyClient, enc Encoder, opts si
 
 	if enc == nil {
 		var err error
-		enc, err = newEncoder(cfg.Format)
+		enc, err = newEncoder(cfg.Format, nil)
 		require.NoError(t, err)
 	}
 

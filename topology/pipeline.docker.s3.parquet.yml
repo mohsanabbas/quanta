@@ -1,5 +1,5 @@
-# Pipeline config: Kafka → S3 only (Docker/LocalStack)
-# Testing batch.Flusher refactor with larger batches
+# Pipeline config: Kafka → S3 with Parquet format
+# Testing schema-based data contract with ODCS-aligned schema
 schema_version: v1
 
 source:
@@ -32,10 +32,11 @@ sink_configs:
   s3:
     bucket: quanta-output
     region: us-east-1
-    prefix: events
-    file_suffix: .jsonl
-    batch_size: 5000          # 5000 records per file (larger files)
-    flush_interval: 10s       # flush every 10s if batch not full
+    prefix: parquet
+    format: parquet
+    schema_file: /config/schemas/ai_events.schema.yaml
+    batch_size: 5000
+    flush_interval: 10s
     auth_strategy: static
     access_key_id: test
     secret_access_key: test
@@ -56,7 +57,7 @@ dlq:
     topic: "quanta-dlq"
     acks: "all"
     version: "3.6.0"
-    client_id: "quanta-dlq-s3"
+    client_id: "quanta-dlq-s3-parquet"
     timeout: 10s
     retry_max: 3
     retry_backoff_min: 100ms

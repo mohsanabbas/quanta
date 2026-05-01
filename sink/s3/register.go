@@ -9,6 +9,8 @@ import (
 	"quanta/sink"
 )
 
+var errBadConfigType = errors.New("unexpected config type")
+
 func init() {
 	sink.Register(sink.Registration{
 		Name:         "s3",

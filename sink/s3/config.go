@@ -13,7 +13,8 @@ type Config struct {
 	Prefix     string `yaml:"prefix"`
 	FileSuffix string `yaml:"file_suffix"`
 
-	Format string `yaml:"format"`
+	Format     string `yaml:"format"`
+	SchemaFile string `yaml:"schema_file"` // Required for parquet format
 
 	BatchSize     int           `yaml:"batch_size"`
 	FlushInterval time.Duration `yaml:"flush_interval"`
@@ -51,8 +52,8 @@ func (c *Config) validate() error {
 	if c.Format == "" {
 		c.Format = "jsonl"
 	}
-	if _, err := newEncoder(c.Format); err != nil {
-		return qerr.Config("s3", "validate", err)
+	if c.Format == "parquet" && c.SchemaFile == "" {
+		return qerr.Config("s3", "validate", errors.New("schema_file is required for parquet format"))
 	}
 
 	switch c.AuthStrategy {
