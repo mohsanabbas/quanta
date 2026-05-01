@@ -11,6 +11,7 @@ import (
 
 	// Driver registration — blank imports trigger init().
 	// Add or remove drivers here to control what the binary supports.
+	_ "quanta/sink/clickhouse"
 	_ "quanta/sink/kafka"
 	_ "quanta/sink/s3"
 	_ "quanta/sink/stdout"
