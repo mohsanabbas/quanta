@@ -1,0 +1,67 @@
+# ==============================================================================
+# KAFKA SOURCE CONFIGURATION (Production / EKS + Amazon MSK)
+# ==============================================================================
+# Target: 150,000 events/sec peak | 7 billion events/day
+# Topic:  48 partitions, RF=3, LZ4 compression, 48h retention
+# Mode:   E2E commit (at-least-once — zero message loss)
+#
+# MSK bootstrap addresses are injected at deploy time via K8s Secret
+# (quanta-prod / kafka-brokers). Replace the placeholder below or use
+# envsubst / Kustomize / Helm to substitute KAFKA_BROKERS before applying.
+# ==============================================================================
+
+schema_version: v1
+
+# Amazon MSK bootstrap broker string (TLS port 9094).
+# Populated at deploy time — see k8s/production/04-deployment-engine.yaml.
+brokers:
+  - "REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"
+
+topics:
+  - "event-tracking_track-events-approved"
+
+# Unique consumer group.  One group across all quanta-engine pods so Kafka
+# distributes the 48 partitions across the pod fleet (1 partition per pod
+# at minimum scale; up to 48 pods at maximum KEDA scale-out).
+group_id: "quanta-prod-engine"
+
+# newest: only consume messages produced after startup.
+# oldest: reprocess from the beginning (use for backfill / incident replay).
+start_from: "newest"
+
+# Must match the MSK cluster version.
+version: "3.6.0"
+
+# ==============================================================================
+# COMMIT MODE: E2E (End-to-End) — at-least-once delivery
+# ==============================================================================
+# Offsets are only committed AFTER the sink acknowledges successful delivery.
+# This prevents message loss on engine crash or rolling restart.
+commit_mode: "e2e"
+
+# Combined: blocks when EITHER inflight_bytes OR inflight_msgs is exhausted.
+# Prevents OOM when the transformer or sink is temporarily slow.
+backpressure_strategy: "combined"
+
+# Sliding window handles out-of-order acks safely (async sink ack paths).
+checkpoint_strategy: "sliding_window"
+
+# Hybrid: commit on whichever threshold is hit first (time or count).
+# See kafka_source.prod.tuning.yml for commit_interval and commit_step.
+commit_strategy_type: "hybrid"
+
+# ==============================================================================
+# MSK TLS / SASL
+# ==============================================================================
+# MSK requires TLS. SASL credentials are mounted from the quanta-prod Secret.
+# Leave sasl_user / sasl_pass empty if using IAM auth (MSK IAM plugin).
+tls_enabled: true
+
+# Populate from K8s Secret if using SASL/SCRAM:
+# sasl_user and sasl_pass are overridden by SASL_USER / SASL_PASS env vars
+# that the deployment injects from the quanta-prod Secret.
+sasl_user: ""
+sasl_pass: ""
+
+# Disable verbose Sarama wire logging in production.
+sarama_verbose: false

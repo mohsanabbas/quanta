@@ -1,0 +1,73 @@
+# ==============================================================================
+# PRODUCTION PIPELINE — EKS (150k RPS / 7B events per day)
+# ==============================================================================
+# Single gRPC transformer stage.
+# Transformer address resolves to a K8s ClusterIP Service inside the cluster.
+# DLQ routes permanently-failed frames to a dedicated Kafka topic.
+#
+# DEPLOY ORDER: transformer Deployment must be Ready before engine starts,
+# because the engine dials the transformer address at pipeline compile time.
+# ==============================================================================
+
+schema_version: v1
+
+source:
+  kind: kafka
+  driver: sarama
+  config: kafka_source.prod.yml
+  # Automatically loads: kafka_source.prod.tuning.yml
+
+transformers:
+  - name: cloudevents
+    type: grpc
+    # K8s ClusterIP service — resolves inside cluster only.
+    # Service port uses appProtocol: h2c so the load-balancer
+    # keeps HTTP/2 connections alive across transformer pod restarts.
+    address: "transformer-cloudevents:50052"
+    # Raised from 100 (dev) → 200 for production concurrency.
+    # 8 engine pods × 200 = 1,600 concurrent streams into transformer.
+    max_in_flight: 200
+    # Generous deadline: covers cold-start, GC pauses, and brief network blips.
+    timeout_ms: 2000
+    content_type: "application/protobuf"
+    retry_policy:
+      attempts: 3
+      backoff_ms: 200
+
+sinks:
+  - kafka
+  # Uncomment to enable S3 data-lake sink in parallel:
+  # - s3
+
+sink_configs:
+  kafka:
+    # KAFKA_BROKERS is injected at runtime via the quanta-prod K8s Secret.
+    # koanf env-override key: KAFKA_BROKERS → kafka.brokers
+    brokers: ["REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"]
+    topic: "quanta-output"
+    acks: "all"                   # strongest durability guarantee
+    version: "3.6.0"
+    client_id: "quanta-prod-sink"
+    timeout: 10s
+    retry_max: 5
+    retry_backoff_min: 100ms
+    retry_backoff_max: 2s
+  # s3:
+  #   bucket: "quanta-prod-output"
+  #   region: "us-east-1"
+  #   prefix: "events/"
+  #   format: "parquet"
+
+dlq:
+  enabled: true
+  sink: kafka
+  sink_config:
+    brokers: ["REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"]
+    topic: "quanta-engine-dlq"
+    acks: "all"
+  include_headers: true
+  include_error_metadata: true
+
+debug:
+  per_frame_delay_ms: 0
+  print_counter: false   # disable in production to avoid log spam
