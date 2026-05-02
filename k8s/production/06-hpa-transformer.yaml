@@ -1,0 +1,42 @@
+# ==============================================================================
+# HPA: transformer-cloudevents (CPU-driven)
+# ==============================================================================
+# Scales 4 → 16 replicas when average CPU exceeds 70%.
+# transformer max replicas (16) is 2× engine baseline (8) so the transformer
+# can always absorb a full engine scale-out without becoming the bottleneck.
+#
+# Scale-up is fast (30s stabilisation); scale-down is slow (5m) to avoid
+# thrashing as engine pods come and go during Kafka rebalances.
+# ==============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: transformer-cloudevents
+  namespace: quanta-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: transformer-cloudevents
+  minReplicas: 4
+  maxReplicas: 16
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

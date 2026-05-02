@@ -1,0 +1,17 @@
+# ==============================================================================
+# PodDisruptionBudget: transformer-cloudevents
+# ==============================================================================
+# minAvailable: 3 — keeps 3 of the baseline 4 transformer pods alive during
+# voluntary disruptions. Prevents all engine gRPC connections from timing out
+# simultaneously during a node drain or rolling update.
+# ==============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: transformer-cloudevents
+  namespace: quanta-production
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: transformer-cloudevents

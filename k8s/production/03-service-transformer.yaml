@@ -1,0 +1,26 @@
+# ==============================================================================
+# Service: transformer-cloudevents (ClusterIP, h2c)
+# ==============================================================================
+# appProtocol: h2c tells AWS Load Balancer Controller and any service mesh
+# to treat this as HTTP/2 cleartext, preserving multiplexed gRPC connections
+# across transformer pod churn.
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: transformer-cloudevents
+  namespace: quanta-production
+  labels:
+    app: transformer-cloudevents
+    app.kubernetes.io/name: transformer-cloudevents
+    app.kubernetes.io/component: transformer
+spec:
+  type: ClusterIP
+  selector:
+    app: transformer-cloudevents
+  ports:
+    - name: grpc
+      port: 50052
+      targetPort: 50052
+      protocol: TCP
+      appProtocol: h2c

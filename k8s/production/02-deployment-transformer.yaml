@@ -1,0 +1,68 @@
+# ==============================================================================
+# Deployment: gRPC transformer (cloudevents normalizer)
+# ==============================================================================
+# Baseline: 4 replicas. HPA scales to 16 at CPU 70%.
+# Must be Ready before quanta-engine starts (engine dials on pipeline compile).
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transformer-cloudevents
+  namespace: quanta-production
+  labels:
+    app: transformer-cloudevents
+    app.kubernetes.io/name: transformer-cloudevents
+    app.kubernetes.io/component: transformer
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: transformer-cloudevents
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 2
+  template:
+    metadata:
+      labels:
+        app: transformer-cloudevents
+    spec:
+      # Spread pods across AZs to survive a zone outage.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: transformer-cloudevents
+      containers:
+        - name: transformer
+          # Replace with your ECR image path before deploying.
+          image: REPLACE_WITH_ECR_REPO/transformer-cloudevents:REPLACE_WITH_TAG
+          imagePullPolicy: Always
+          ports:
+            - name: grpc
+              containerPort: 50052
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            grpc:
+              port: 50052
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 50052
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+      # Allow graceful drain: existing gRPC streams finish before pod exits.
+      terminationGracePeriodSeconds: 60

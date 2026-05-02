@@ -1,0 +1,88 @@
+# ==============================================================================
+# ConfigMap: quanta pipeline topology files
+# ==============================================================================
+# Mounted read-only at /config inside the engine container.
+# The engine reads PIPELINE_CONFIG=/config/pipeline.prod.yml on startup.
+#
+# IMPORTANT: Replace REPLACE_WITH_MSK_BOOTSTRAP_BROKERS placeholders before
+# applying, or use envsubst / Kustomize / Helm to inject MSK bootstrap
+# addresses from a sealed-secret or AWS Secrets Manager sync.
+# ==============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quanta-prod-pipeline
+  namespace: quanta-production
+  labels:
+    app.kubernetes.io/name: quanta
+    app.kubernetes.io/component: config
+data:
+  # Pipeline spec — reference: topology/pipeline.prod.yml
+  pipeline.prod.yml: |
+    schema_version: v1
+    source:
+      kind: kafka
+      driver: sarama
+      config: kafka_source.prod.yml
+    transformers:
+      - name: cloudevents
+        type: grpc
+        address: "transformer-cloudevents:50052"
+        max_in_flight: 200
+        timeout_ms: 2000
+        content_type: "application/protobuf"
+        retry_policy:
+          attempts: 3
+          backoff_ms: 200
+    sinks:
+      - kafka
+    sink_configs:
+      kafka:
+        brokers: ["REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"]
+        topic: "quanta-output"
+        acks: "all"
+        version: "3.6.0"
+        client_id: "quanta-prod-sink"
+        timeout: 10s
+        retry_max: 5
+        retry_backoff_min: 100ms
+        retry_backoff_max: 2s
+    dlq:
+      enabled: true
+      sink: kafka
+      sink_config:
+        brokers: ["REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"]
+        topic: "quanta-engine-dlq"
+        acks: "all"
+      include_headers: true
+      include_error_metadata: true
+    debug:
+      per_frame_delay_ms: 0
+      print_counter: false
+
+  # Kafka source config — reference: topology/kafka_source.prod.yml
+  kafka_source.prod.yml: |
+    schema_version: v1
+    brokers:
+      - "REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"
+    topics:
+      - "event-tracking_track-events-approved"
+    group_id: "quanta-prod-engine"
+    start_from: "newest"
+    version: "3.6.0"
+    commit_mode: "e2e"
+    backpressure_strategy: "combined"
+    checkpoint_strategy: "sliding_window"
+    commit_strategy_type: "hybrid"
+    tls_enabled: true
+    sasl_user: ""
+    sasl_pass: ""
+    sarama_verbose: false
+
+  # Kafka source tuning — auto-loaded alongside kafka_source.prod.yml
+  kafka_source.prod.tuning.yml: |
+    inflight_bytes: 536870912
+    inflight_msgs: 50000
+    window_bits: 32768
+    commit_interval: 5s
+    commit_step: 1000

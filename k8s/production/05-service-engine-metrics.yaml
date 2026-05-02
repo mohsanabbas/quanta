@@ -1,0 +1,25 @@
+# ==============================================================================
+# Service: quanta-engine Prometheus metrics
+# ==============================================================================
+# ClusterIP on :9100 — scraped by the ServiceMonitor in 12-service-monitor.yaml.
+# Exposes counters: quanta_frames_processed_total, quanta_transform_errors_total,
+# quanta_transform_duration_seconds (histogram), and sink/DLQ error counters.
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: quanta-engine-metrics
+  namespace: quanta-production
+  labels:
+    app: quanta-engine
+    app.kubernetes.io/name: quanta-engine
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: quanta-engine
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+      protocol: TCP

@@ -1,0 +1,28 @@
+# ==============================================================================
+# NetworkPolicy: restrict transformer ingress
+# ==============================================================================
+# Only pods labelled app=quanta-engine may reach the transformer on port 50052.
+# All other inbound TCP connections to transformer pods are denied.
+#
+# Requires a CNI plugin that enforces NetworkPolicy (e.g. Calico, Cilium,
+# or the VPC CNI with network policy support enabled on EKS).
+# ==============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: transformer-ingress-from-engine
+  namespace: quanta-production
+spec:
+  podSelector:
+    matchLabels:
+      app: transformer-cloudevents
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: quanta-engine
+      ports:
+        - protocol: TCP
+          port: 50052

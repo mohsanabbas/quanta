@@ -1,0 +1,116 @@
+# ==============================================================================
+# Deployment: quanta-engine
+# ==============================================================================
+# Baseline: 8 replicas → handles 120–200k RPS (15–25k/pod).
+# KEDA ScaledObject (08-keda-scaledobject.yaml) drives lag-based scaling
+# up to 48 replicas (= Kafka partition count). Deploy transformer first.
+#
+# SECRETS: Create the quanta-prod Secret before applying:
+#   kubectl create secret generic quanta-prod \
+#     --from-literal=kafka-brokers="b-1.xxx.kafka.us-east-1.amazonaws.com:9094,..." \
+#     --namespace quanta-production
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quanta-engine
+  namespace: quanta-production
+  labels:
+    app: quanta-engine
+    app.kubernetes.io/name: quanta-engine
+    app.kubernetes.io/component: engine
+spec:
+  replicas: 8
+  selector:
+    matchLabels:
+      app: quanta-engine
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable matches PDB minAvailable=6 (8-2=6).
+      maxUnavailable: 2
+      maxSurge: 2
+  template:
+    metadata:
+      labels:
+        app: quanta-engine
+      annotations:
+        # Prometheus pod-level scrape annotation (fallback if ServiceMonitor absent).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Spread engine pods evenly across AZs.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: quanta-engine
+      containers:
+        - name: engine
+          # Replace with your ECR image path before deploying.
+          image: REPLACE_WITH_ECR_REPO/quanta-engine:REPLACE_WITH_TAG
+          imagePullPolicy: Always
+          env:
+            # MSK bootstrap brokers injected from K8s Secret.
+            - name: KAFKA_BROKERS
+              valueFrom:
+                secretKeyRef:
+                  name: quanta-prod
+                  key: kafka-brokers
+            # Topic names (override in Secret if they vary per environment).
+            - name: INPUT_TOPIC
+              value: "event-tracking_track-events-approved"
+            - name: OUTPUT_TOPIC
+              value: "quanta-output"
+            # Path to the pipeline spec mounted from the ConfigMap.
+            - name: PIPELINE_CONFIG
+              value: "/config/pipeline.prod.yml"
+            # gRPC keepalive: prevents stale connections to replaced transformer pods.
+            - name: GRPC_KEEPALIVE_TIME_MS
+              value: "30000"
+            - name: GRPC_KEEPALIVE_TIMEOUT_MS
+              value: "5000"
+            # Log level (info | debug | warn | error).
+            - name: LOG_LEVEL
+              value: "info"
+            - name: LOG_FORMAT
+              value: "json"
+          ports:
+            - name: grpc-control
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: quanta-prod-pipeline
+      # Allow in-flight Kafka commits to complete on graceful shutdown.
+      terminationGracePeriodSeconds: 90

@@ -1,0 +1,18 @@
+# ==============================================================================
+# PodDisruptionBudget: quanta-engine
+# ==============================================================================
+# minAvailable: 6 — at baseline 8 pods, node drains / rollouts may remove
+# at most 2 pods simultaneously (matches maxUnavailable: 2 in the Deployment).
+# This ensures at least 75% capacity during voluntary disruptions
+# (node upgrades, cluster autoscaler scale-in, kubectl drain).
+# ==============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: quanta-engine
+  namespace: quanta-production
+spec:
+  minAvailable: 6
+  selector:
+    matchLabels:
+      app: quanta-engine

@@ -1,0 +1,77 @@
+# ==============================================================================
+# KEDA ScaledObject: quanta-engine (Kafka lag — PRIMARY scaler)
+# ==============================================================================
+# Prerequisites:
+#   helm install keda kedacore/keda --namespace keda --create-namespace
+#
+# Scaling logic:
+#   desired_replicas = ceil(total_lag / lagThreshold)
+#   clamped to [minReplicaCount, maxReplicaCount]
+#
+# At peak (150k RPS across 48 partitions, 3k lag/partition threshold):
+#   total_lag = 48 × 3000 = 144,000 → ceil(144000/3000) = 48 replicas
+#
+# maxReplicaCount MUST equal the Kafka partition count (48).
+# More pods than partitions yields idle pods with zero assignments.
+#
+# TriggerAuthentication (quanta-kafka-auth) must be created separately
+# with MSK TLS credentials if MSK uses SASL. For MSK IAM auth, use the
+# KEDA AWS MSK scaler instead of the generic kafka scaler.
+# ==============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: quanta-engine
+  namespace: quanta-production
+  annotations:
+    # Lets KEDA own and manage the HPA it creates for quanta-engine.
+    # Remove 07-hpa-engine-guardrail.yaml if this annotation is active
+    # to avoid two HPAs targeting the same Deployment.
+    scaledobject.keda.sh/transfer-hpa-ownership: "true"
+spec:
+  scaleTargetRef:
+    name: quanta-engine
+  # Never scale below 8: handles average load (~81k RPS) without KEDA latency.
+  minReplicaCount: 8
+  # Hard ceiling = Kafka partition count. Kafka will not assign more partitions
+  # than exist, so pods above this number sit idle.
+  maxReplicaCount: 48
+  # Wait 120s after lag drops before removing pods (avoids thrashing).
+  cooldownPeriod: 120
+  # How often KEDA polls Kafka for lag metrics.
+  pollingInterval: 15
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 4
+              periodSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 120
+  triggers:
+    - type: kafka
+      metadata:
+        # Replace with actual MSK bootstrap brokers.
+        bootstrapServers: "REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"
+        consumerGroup: "quanta-prod-engine"
+        topic: "event-tracking_track-events-approved"
+        # Add 1 pod per 3,000 lag per partition.
+        lagThreshold: "3000"
+        # Start scaling only when lag exceeds 500 (avoids noise from small spikes).
+        activationLagThreshold: "500"
+        offsetResetPolicy: latest
+        # Do not include partitions with no active consumer in lag calculation.
+        allowIdleConsumers: "false"
+        # Do not scale to zero if offset fetch fails — keeps minimum 8 pods.
+        scaleToZeroOnInvalidOffset: "false"
+        excludePersistentLag: "false"
+      # Reference a TriggerAuthentication for MSK TLS/SASL if required.
+      # authenticationRef:
+      #   name: quanta-kafka-auth

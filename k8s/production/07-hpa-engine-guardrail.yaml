@@ -1,0 +1,48 @@
+# ==============================================================================
+# HPA: quanta-engine CPU guard-rail
+# ==============================================================================
+# KEDA ScaledObject (08-keda-scaledobject.yaml) is the PRIMARY scaler and
+# owns the HPA it creates. This separate HPA acts as a CPU-based safety net
+# in case KEDA misses a burst (e.g. lag telemetry lag from MSK).
+#
+# To avoid conflicts, keep minReplicas == KEDA minReplicaCount (8) and
+# maxReplicas == KEDA maxReplicaCount (48).  KEDA will win on lag spikes;
+# this HPA will win if CPU is saturated before lag builds (e.g. heavy
+# transformer retry storms).
+#
+# If running KEDA >= v2.10 with HPA ownership transfer enabled (annotation
+# scaledobject.keda.sh/transfer-hpa-ownership: "true" on the ScaledObject),
+# you can delete this file and let KEDA manage the single HPA object.
+# ==============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: quanta-engine-cpu-guardrail
+  namespace: quanta-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: quanta-engine
+  minReplicas: 8
+  maxReplicas: 48
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 120

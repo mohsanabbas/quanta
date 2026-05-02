@@ -1,0 +1,8 @@
+# Isolated namespace for all quanta production workloads.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quanta-production
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+    environment: production

@@ -1,0 +1,37 @@
+# ==============================================================================
+# ServiceMonitor: quanta-engine Prometheus scrape config
+# ==============================================================================
+# Requires kube-prometheus-stack (Prometheus Operator) to be installed.
+# The `release: kube-prometheus-stack` label must match the Prometheus
+# Operator's serviceMonitorSelector in your cluster. Adjust if different.
+#
+# Scraped metrics include (from /metrics on :9100):
+#   quanta_frames_processed_total
+#   quanta_transform_errors_total
+#   quanta_transform_duration_seconds (histogram)
+#   quanta_sink_errors_total
+#   quanta_dlq_frames_total
+#
+# Recommended alerts (create as PrometheusRule):
+#   - quanta_transform_errors_total rate > 0.1% of throughput for 2m
+#   - quanta_sink_errors_total rate > 0 for 1m
+#   - kafka_consumer_group_lag > 10000 per partition for 5m
+# ==============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: quanta-engine
+  namespace: quanta-production
+  labels:
+    # Must match Prometheus Operator serviceMonitorSelector. Default for
+    # kube-prometheus-stack Helm chart is `release: <helm-release-name>`.
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: quanta-engine
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
